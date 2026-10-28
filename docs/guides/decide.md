@@ -181,6 +181,9 @@ answer validation, retries, and provider errors follow AI SDK semantics.
 You can also call `decide` outside a tool; it does not require an active eve
 session. Each call performs its own decision. `auto` uses this function
 and adds the per-turn routing behavior described below.
+For example, a Slack message hook can use it to
+[decide when to reply in a thread](/docs/channels/slack#decide-when-to-reply-in-a-thread)
+without requiring a mention.
 
 ## Judge eval results
 

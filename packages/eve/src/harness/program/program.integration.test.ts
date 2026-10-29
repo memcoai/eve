@@ -484,6 +484,19 @@ function withHistory(
 /** What a provider says when a prompt doesn't fit the model's window. */
 const tooLong = () => new Error("prompt is too long: 205000 tokens > 200000 maximum");
 
+describe("eve's own loop", () => {
+  it("keeps the turn's input in history when the model call fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { result } = await runTurn(nativeProgram, [new Error("upstream unavailable")]);
+
+    expect(result.settledTurn).toMatchObject({ isError: true });
+    expect(result.session.history).toMatchObject([
+      { content: "Which sources back the second claim?", kind: "user", role: "user" },
+    ]);
+  });
+});
+
 describe("a session program's history", () => {
   it("is asked before every model call, with the call's size", async () => {
     const seen: unknown[] = [];

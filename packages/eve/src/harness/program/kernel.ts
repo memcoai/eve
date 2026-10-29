@@ -16,7 +16,8 @@ import { failProgram, invalid, PROGRAM_FAILED } from "./failure.js";
 import { fact, turnSettled } from "#harness/facts.js";
 import { failTurnForReaction, prepareModelCall } from "#harness/step/context.js";
 import type { TurnInput } from "#harness/step/intake.js";
-import { buildPrompt, previewPrompt } from "#harness/step/prompt.js";
+import { buildPrompt, placeTurnInput, previewPrompt } from "#harness/step/prompt.js";
+import { getTurnClientContextState } from "#harness/turn-client-context.js";
 import { defineJsonSchema } from "#tools/schema.js";
 import { nativeHistory, nativeNext, nativeProgram } from "./native.js";
 import { SessionIdKey } from "#context/keys.js";
@@ -137,33 +138,28 @@ function programOf(step: Step): Program {
   );
 }
 
-/** What the coming model step reads, or how the turn ended without one. */
-export type BeforeModel =
-  | {
-      readonly turn: TurnInput;
-      /** The step's dynamic values were evaluated for the call already. */
-      readonly prepared?: true;
-    }
-  | { readonly ended: StepResult };
+/** The coming model step's input, which joined history; or how the turn ended without one. */
+export type BeforeModel = { readonly turn: TurnInput } | { readonly ended: StepResult };
 
 /** The program's answer is to call the model. */
 const MODEL = Symbol("model");
 
 /**
- * Asks the session's program what the turn does before a model call: at the turn's start, after
- * calls settle, after input joined. Right after it continued with a note, it has decided already.
- * The step's dynamic values are evaluated first, then the turn's input joins history, so what the
- * program reads, and what it does, is the same here as after a model step.
+ * Readies a model call: the step's dynamic values are evaluated, then the turn's input joins
+ * history, for every agent. Then a program other than eve's own says what the turn does: at the
+ * turn's start, after calls settle, after input joined. Right after it continued with a note, it
+ * has decided already. What it reads, and what it does, is the same here as after a model step.
  */
 export async function decideBeforeModel(step: Step, turn: TurnInput): Promise<BeforeModel> {
-  if (!programDecides(step) || justNoted(step, turn.turnId)) return { turn };
   const failed = await prepareModelCall(step, previewPrompt(step, turn));
   if (failed !== undefined) return { ended: failed };
+  const noted = justNoted(step, turn.turnId);
   const committed = await commitTurnInput(step, turn);
+  if (!programDecides(step) || noted) return { turn: committed };
   const decided = await decide(step, {});
   if ("ended" in decided) return decided;
   const applied = await apply(step, decided.ctx, decided.next);
-  return applied === MODEL ? { prepared: true, turn: committed } : { ended: applied };
+  return applied === MODEL ? { turn: committed } : { ended: applied };
 }
 
 /**
@@ -181,15 +177,19 @@ export async function decideAfterModel(step: Step, lastStep: ModelStep): Promise
   return applied === MODEL ? { next: step.runStep, session: step.session } : applied;
 }
 
-/** The turn's input joins history ahead of the decision; the model step doesn't add it again. */
+/**
+ * The turn's input joins history before the model call, and before the program decides: a call
+ * that fails leaves it there. The client's context keeps the position it takes here.
+ */
 async function commitTurnInput(step: Step, turn: TurnInput): Promise<TurnInput> {
   const prompt = await buildPrompt(step, turn);
-  step.session = changeHistory(step.session, { extend: prompt.messages });
+  step.session = changeHistory(step.session, {
+    extend: placeTurnInput(step, prompt.messages, turn),
+  });
   return {
     ...turn,
     clientContext: undefined,
-    committed: true,
-    storedClientContext: prompt.clientContext,
+    storedClientContext: getTurnClientContextState(step.session.state, turn.turnId),
   };
 }
 

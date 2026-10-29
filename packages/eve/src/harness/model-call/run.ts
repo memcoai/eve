@@ -14,16 +14,10 @@ import { enforceBudget, humanInputContext } from "#harness/hitl/index.js";
 import { runRequested, runStarted } from "#harness/facts.js";
 import { activeTurnId } from "#harness/session-machine/view.js";
 import { nextRunId } from "#protocol/session-projection.js";
-import {
-  failBoundaryEvent,
-  failModelSelection,
-  prepareModelCall,
-  type Step,
-} from "#harness/step/context.js";
+import { failBoundaryEvent, failModelSelection, type Step } from "#harness/step/context.js";
 import type { TurnInput } from "#harness/step/intake.js";
 import {
   buildPrompt,
-  previewPrompt,
   projectPrompt,
   type Prompt,
   withClientContext,
@@ -69,10 +63,6 @@ export async function runModelStep(
   const start = await decideBeforeModel(step, input.turn);
   if ("ended" in start) return start.ended;
   input = { ...input, turn: start.turn };
-  if (start.prepared !== true) {
-    const failed = await prepareModelCall(step, previewPrompt(step, input.turn));
-    if (failed !== undefined) return failed;
-  }
   const prompt = await buildPrompt(step, input.turn);
   // Over budget, the model doesn't run: the step's messages park with the prompt.
   const overBudget = await enforceBudget(step, prompt.messages);

@@ -1,12 +1,14 @@
 ---
-title: "Linear"
-description: "Reach your agent through Linear Agent Sessions, with native Agent Activities for progress, questions, and responses, and Vercel Connect credentials."
-type: integration
+title: "Linear Reference"
+description: "Linear channel options, credentials, webhook verification, Agent Activity delivery, human-in-the-loop, custom hooks, proactive sessions, and API helpers."
+type: reference
 ---
 
-The Linear channel uses Linear's Agent Session surface rather than ordinary comments. Users delegate work to the agent from Linear, eve receives `AgentSessionEvent` webhooks at `/eve/v1/linear`, and the channel replies with native Agent Activities, including `thought`, `action`, `elicitation`, `response`, and `error`. Credentials can run through [Vercel Connect](../guides/auth-and-route-protection), which manages the Linear app, its access token, and inbound webhook verification, so there's no API key or webhook secret for you to hold. See [Channels](./overview) for the contract this builds on.
+This page documents every part of `linearChannel` from `eve/channels/linear`. For setup and common tasks, start with [Linear](/docs/channels/linear). The channel uses Linear's Agent Session surface rather than ordinary comments: eve receives `AgentSessionEvent` webhooks at `/eve/v1/linear` and replies with native Agent Activities, including `thought`, `action`, `elicitation`, `response`, and `error`. See [Channels](/docs/channels/overview) for the contract this channel builds on.
 
-## Guided Connect setup
+## Setup and credentials
+
+### Guided Connect setup
 
 Run the registry setup from the agent directory:
 
@@ -71,37 +73,48 @@ For Linear's agent surface, configure the OAuth authorize URL with `actor=app` a
 
 Linear sends webhook signatures in `Linear-Signature`; eve verifies the HMAC over the raw body and rejects stale `webhookTimestamp` values. If a trusted gateway verifies Linear before the request reaches eve, pass `credentials.webhookVerifier` instead of a webhook secret. Your custom verifier must enforce its timestamp policy because `maxSkewMs` does not apply.
 
-## How the channel handles messages
+## Options
 
-### Dispatch
+`linearChannel(config)` takes these options. All are optional.
+
+| Option           | Default                                                 | Description                                                                                     |
+| ---------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `credentials`    | `LINEAR_AGENT_ACCESS_TOKEN` and `LINEAR_WEBHOOK_SECRET` | From `connectLinearCredentials(...)`, or `{ accessToken, webhookSecret, webhookVerifier }`.     |
+| `route`          | `/eve/v1/linear`                                        | Webhook path.                                                                                   |
+| `maxSkewMs`      | `60000`                                                 | Allowed webhook timestamp age for the built-in verifier. A custom `webhookVerifier` ignores it. |
+| `api`            | `https://api.linear.app/graphql` and the global `fetch` | `{ apiBaseUrl, fetch }` for GraphQL calls.                                                      |
+| `turnPolicy`     | `"steer"`                                               | `"steer"` or `"queue"` for prompts that arrive during a turn.                                   |
+| `onAgentSession` | Dispatch `created` and `prompted` events                | `(ctx, event)` hook. See [Custom hooks](#custom-hooks).                                         |
+| `onDataWebhook`  | None                                                    | `(event)` handler for other Linear data webhooks delivered to the same route.                   |
+| `events`         | eve's default handlers                                  | Per-event handler overrides. See [Custom hooks](#custom-hooks).                                 |
+
+The channel mounts `POST /eve/v1/linear`.
+
+## Dispatch
 
 The default hook dispatches `created` and `prompted` Agent Session events. The Linear context includes `app_user_id` when available, plus the agent session, issue, comment, and organization identifiers. The session continues with `agent-session:<id>`.
 
-### Delivery
+## Delivery
 
 Turn start posts an ephemeral `thought`, tool calls post ephemeral `action` activities, final assistant text posts a durable `response`, and failures post `error` activities. When the model emits text before a tool call, eve buffers the first non-empty line and uses it as the next ephemeral Linear `thought`, mirroring Slack's typing-status behavior.
 
-### Human-in-the-loop (HITL)
+## Human-in-the-loop (HITL)
 
 Human-in-the-loop (HITL) input requests render as Linear `elicitation` activities. When the user replies to the Agent Session, the channel resolves that prompt back to the pending eve input request and resumes with `answers`.
 
-### Connection authorization
+## Connection authorization
 
 When a user-scoped connection needs authorization, the default channel posts Linear's native `auth` elicitation with the provider's sign-in URL, targeted to the Linear user who started the session. URL-less device flows render their instructions and user code as a plain elicitation. After authorization finishes, the channel posts a thought with the outcome; successful authorization indicates that the parked turn is resuming.
 
-### Proactive sessions
-
-Start a session without an inbound webhook with `receive(linear, { target })`. See [Proactive sessions](#proactive-sessions) below for the target shape and examples.
-
-### Attachments
+## Attachments
 
 Files uploaded to Linear and referenced in an Agent Session prompt, whether as markdown images (`![name](url)`) or file links (`[name](url)`) hosted at `https://uploads.linear.app`, are fetched with the resolved Linear access token and included as file parts. eve sends the bearer token only to that exact HTTPS origin; images and links from other hosts remain markdown text. If a Linear upload fails, an image reference returns non-image content, or a file link returns an HTML page, the reference becomes its label in the text, the agent gets a short note that the file couldn't be retrieved, and the text turn continues.
 
-### API handle
+## API handle
 
 Event handlers receive `channel.linear`, which exposes `createActivity`, `listActivities`, and `updateSession` for custom Agent Activity delivery and Agent Session metadata.
 
-### Low-level API helpers
+## Low-level API helpers
 
 Import `callLinearGraphQL` and `createLinearAgentActivity` from
 `eve/channels/linear` when a custom integration needs a direct API call.
@@ -203,5 +216,5 @@ For issue or comment targets, the channel calls Linear's proactive Agent Session
 
 ## What to read next
 
-- [Channels overview](./overview): the channel contract and every built-in channel
-- [MCP connections](../connections/mcp): use the Linear MCP connection when the agent needs to inspect or edit Linear data from another channel
+- [Channels overview](/docs/channels/overview): the channel contract and every built-in channel
+- [MCP connections](/docs/connections/mcp): use the Linear MCP connection when the agent needs to inspect or edit Linear data from another channel

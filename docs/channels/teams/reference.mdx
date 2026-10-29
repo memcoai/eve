@@ -1,12 +1,12 @@
 ---
-title: "Microsoft Teams"
-description: "Reach your agent from Microsoft Teams via the Bot Framework Activity protocol, with Adaptive Card human-in-the-loop prompts."
-type: integration
+title: "Microsoft Teams Reference"
+description: "Teams channel options, credentials, dispatch, Connector security, delivery, Adaptive Card human-in-the-loop, sign-ins, and attachments."
+type: reference
 ---
 
-The Teams channel runs your agent inside Microsoft Teams as a bot. It takes Bot Framework Activity POSTs, checks the Bot Connector bearer JWT and its `serviceurl` binding on each one, and routes message activities to your agent. Human-in-the-loop (HITL) prompts come back as Adaptive Cards, and replies go out over the Bot Framework Connector REST API. See [Channels](./overview) for the contract this builds on.
+This page documents every part of `teamsChannel` from `eve/channels/teams`. For setup and common tasks, start with [Microsoft Teams](/docs/channels/teams). The channel takes Bot Framework Activity POSTs, checks the Bot Connector bearer JWT and its `serviceurl` binding on each one, and replies over the Bot Framework Connector REST API. See [Channels](/docs/channels/overview) for the contract this channel builds on.
 
-## Add the channel
+## Setup and credentials
 
 ```ts title="agent/channels/teams.ts"
 import { teamsChannel } from "eve/channels/teams";
@@ -51,9 +51,26 @@ MICROSOFT_TENANT_ID=...   # optional, single-tenant bots
 
 By default the channel mounts at `POST /eve/v1/teams`. Point your Azure Bot or Teams app messaging endpoint at that public URL. To mount somewhere else, pass `route: "/api/teams/activity"`.
 
-## How the channel handles messages
+## Options
 
-### Dispatch
+`teamsChannel(config)` takes these options. All are optional.
+
+| Option                | Default                                                                 | Description                                                                                                                                                                        |
+| --------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `credentials`         | `MICROSOFT_APP_ID`, `MICROSOFT_APP_PASSWORD`, and `MICROSOFT_TENANT_ID` | From `connectTeamsCredentials(...)`, or `{ appId, appPassword, tenantId, tokenProvider, webhookVerifier }`. `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, and `TEAMS_TENANT_ID` also work. |
+| `route`               | `/eve/v1/teams`                                                         | Messaging endpoint path.                                                                                                                                                           |
+| `api`                 | `https://login.microsoftonline.com` and the global `fetch`              | `{ loginBaseUrl, fetch }` for Connector token requests.                                                                                                                            |
+| `adaptiveCardVersion` | `"1.5"`                                                                 | Adaptive Card schema version for HITL and sign-in cards.                                                                                                                           |
+| `turnPolicy`          | `"steer"`                                                               | `"steer"` or `"queue"` for messages that arrive during a turn.                                                                                                                     |
+| `files`               | Enabled, Microsoft hosts only, up to 25 MB                              | `{ enabled, allowedHosts, uploadPolicy }`. See [Attachments](#attachments).                                                                                                        |
+| `onMessage`           | Personal chats and direct mentions                                      | `(ctx, message)` hook. Return `{ auth }` to dispatch or `null` to ignore.                                                                                                          |
+| `onAnswers`           | The submitting user, unless `onMessage` is set                          | `(ctx, activity)` hook that authorizes HITL submissions. With a custom `onMessage` and no `onAnswers`, eve rejects them.                                                           |
+| `onInvoke`            | Acknowledge with `200 OK`                                               | `(ctx, activity)` hook for invokes that aren't HITL.                                                                                                                               |
+| `events`              | eve's default handlers                                                  | Per-event handler overrides.                                                                                                                                                       |
+
+The channel mounts `POST /eve/v1/teams`.
+
+## Dispatch
 
 The default `onMessage` handles two cases: personal-chat messages, and channel or group-chat messages that mention the bot directly. Ambient resource-specific-consent messages are dropped unless you override it. Return `title` alongside `auth` to set the title when the dispatch starts a run. Before dispatch, eve strips the mention, adds `<teams_context>` with `user_id`, `bot_id`, and `is_mentioned`, and scopes channel and group threads by root activity id (`replyToId ?? id`).
 
@@ -70,28 +87,32 @@ export default teamsChannel({
       ? { auth: defaultTeamsAuth(message) }
       : null;
   },
+  // A custom onMessage turns off the default card-submission auth.
+  onAnswers: (_ctx, activity) => ({ auth: defaultTeamsAuth(activity) }),
 });
 ```
 
 `isSubscribed()` checks whether the conversation has previously involved the agent.
 
-### Delivery
+## Connector security
 
 Native Bot Connector verification requires the activity's `serviceUrl` to match the verified token's `serviceurl` claim. A custom `webhookVerifier` replaces this verification and must authenticate the forwarded activity and its service URL. Proactive conversation references are trusted application input: load them from your own verified records, not a caller-supplied URL. Outbound Connector requests require HTTPS without URL credentials, query strings, or fragments, and do not follow redirects.
 
 HTTP service URLs used by Bot Framework Emulator are not supported, even with a custom verifier. Use an HTTPS endpoint or proxy for local Connector testing.
 
+## Delivery
+
 Replies post as Markdown (`textFormat: "markdown"`), with oversized text split across messages and a typing indicator sent on turn start and action requests. `thread.mentionUser()` escapes the display name (or fallback user ID) as literal text inside the mention; the mention entity retains the original identity fields.
 
-### Human-in-the-loop (HITL)
+## Human-in-the-loop (HITL)
 
 A human-in-the-loop (HITL) request, an `interaction.opened` fact, renders as an Adaptive Card. Approval cards show the tool input in the card and fallback text. Buttons and options map to `Action.Submit`, selects to `Input.ChoiceSet`, and freeform to `Input.Text`. Teams may return a submission as a message or invoke; eve handles both before the normal message mention gate and resumes the thread recorded in the card.
 
-By default, submissions use the Teams identity of the user who clicked the card. If you customize `onMessage` for an allowlist, configure the same policy in `onAnswers`; eve otherwise rejects HITL submissions rather than bypassing the message gate.
+By default, submissions use the Teams identity of the user who clicked the card. When you set `onMessage` without `onAnswers`, eve rejects every HITL submission rather than bypassing the message gate. Set `onAnswers` with the same policy as `onMessage`; return `{ auth: defaultTeamsAuth(activity) }` to accept the submitting user.
 
 When a tool approval settles, eve replaces its Adaptive Card with the outcome and responder name. A response rejected by an approval policy leaves the shared card unchanged. A submission to a card whose session is no longer active, for example because its run was cancelled outside eve, replaces the card with its prompt and `No longer active`, and the invoke response tells the person who submitted to send a new message.
 
-### Connection sign-ins
+## Connection sign-ins
 
 When a connection needs the person to sign in, eve's `interaction.opened` handler posts an Adaptive Card for the sign-in. In a personal chat, the card includes the sign-in link and any confirmation code. In group chats and channels, the shared card only says who has to sign in and has a **Sign in** button (`Action.Execute`). When someone presses it, eve resolves who they are the same way it does for HITL answers (`onAnswers`). If that's the person who needs to sign in, eve sends back a card with the link and code, and Teams shows that card only to them. Anyone else is told they can't open it. That way another member can't finish the sign-in with their own account and have it saved under the requester's identity.
 
@@ -99,11 +120,11 @@ If you customize `onMessage` without also setting `onAnswers`, nobody can open a
 
 For invokes that aren't HITL, handle them in `onInvoke(ctx, activity)`.
 
-### Proactive sessions
+## Proactive sessions
 
 Proactive sessions need an existing conversation reference, because the Bot Framework v1 surface cannot create new chats by Azure Active Directory (AAD) user id. Pass `serviceUrl`, `conversationId`, and the other reference fields to `receive(teams, { target })`.
 
-### Attachments
+## Attachments
 
 Inbound files reach the agent as file parts. eve downloads images pasted into a message from Microsoft Bot Connector hosts with your bot credentials, and files uploaded in a personal chat from their pre-authenticated SharePoint download URL (`*.sharepoint.com` or `*.sharepoint.us`). A failed download, or one over the upload limit (25 MB unless `files.uploadPolicy` sets `maxBytes`), reaches the agent as a short note. Personal-chat uploads need `supportsFiles: true` on the bot in your Teams app manifest.
 
@@ -117,5 +138,5 @@ export default teamsChannel({
 
 ## What to read next
 
-- [Channels overview](./overview): the channel contract and every built-in channel
-- [Auth & route protection](../guides/auth-and-route-protection): authenticating inbound traffic
+- [Channels overview](/docs/channels/overview): the channel contract and every built-in channel
+- [Auth & route protection](/docs/guides/auth-and-route-protection): authenticating inbound traffic

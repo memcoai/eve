@@ -116,7 +116,7 @@ export default defineHook({
 });
 ```
 
-**Channel `events` handlers** now take `(event, ctx)` instead of `(eventData, channel, ctx)`. Read `event.data`, `event.scope`, and `ctx.channel`. Slack renderers take `(event, ctx, next)`; pass a fact to `next(event)` to continue rendering. A `committed` handler can observe the whole committed line. See [Custom channels](../channels/custom) and [Slack rendering](../channels/slack#customize-rendering).
+**Channel `events` handlers** now take `(event, ctx)` instead of `(eventData, channel, ctx)`. Read `event.data`, `event.scope`, and `ctx.channel`. Slack renderers take `(event, ctx, next)`; pass a fact to `next(event)` to continue rendering. A `committed` handler can observe the whole committed line. See [Custom channels](../channels/custom) and [Slack rendering](../channels/slack/reference#customize-rendering).
 
 **Instrumentation** uses `session.ended`, `turn.settled`, `call.requested`/`call.settled`, and `interaction.opened`/`interaction.settled`, with terminal `outcome` instead of separate success/failure event names. `channel.delivery.*` becomes `delivery.consumed`/`delivery.settled`; `step.attempt.*` becomes `model.started`/`model.retried`/`model.settled`. See [Instrumentation](/docs/observability/instrumentation#lifecycle-events).
 

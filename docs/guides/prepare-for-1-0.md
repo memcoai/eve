@@ -216,7 +216,7 @@ Card builders no longer accept JSX-style props with `children`. Call their data 
 
 Use `CardText` for labels and `cardToFallbackText` for whole cards. Use native Slack view data for custom modals; the removed builders did not have a supported eve delivery path. Built-in human-in-the-loop modals are unchanged.
 
-Supported message cards remain available. An existing `initialMessage: { card }` continues to work; proactive messages can now also use `{ text }`, `{ markdown }`, or `{ blocks, text? }`. Optional files upload into the root message's thread. Retrying a proactive send can repeat both the root post and its uploads. See [Slack cards](../channels/slack#cards) and [proactive sends](../channels/slack#proactive-sessions).
+Supported message cards remain available. An existing `initialMessage: { card }` continues to work; proactive messages can now also use `{ text }`, `{ markdown }`, or `{ blocks, text? }`. Optional files upload into the root message's thread. Retrying a proactive send can repeat both the root post and its uploads. See [Slack cards](../channels/slack/reference#cards) and [proactive sends](../channels/slack/reference#proactive-sessions).
 
 ## Replace undocumented helper imports
 

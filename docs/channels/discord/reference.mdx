@@ -1,10 +1,10 @@
 ---
-title: "Discord"
-description: "Reach your agent from Discord messages, DMs, and mentions, and from slash commands, components, and modals."
-type: integration
+title: "Discord Reference"
+description: "Discord channel options, setup, the Gateway relay, session grouping, command hooks, delivery, human-in-the-loop, sign-ins, and proactive sessions."
+type: reference
 ---
 
-The Discord channel wires your agent into Discord's HTTP Interactions, including slash and application commands, message components, and modal submissions. Discord enforces a three-second ACK deadline, so the channel acknowledges the command right away and runs the eve work in the background. Credentials and inbound request verification run through [Vercel Connect](../guides/auth-and-route-protection), so Discord's bot token stays out of your environment and Connect verifies Discord's signature before forwarding an interaction to eve. To also answer DMs and mentions, add a [Discord Gateway relay](#reply-to-dms-and-mentions-experimental). See [Channels](./overview) for the contract this builds on.
+This page documents every part of `discordChannel` from `eve/channels/discord`. For setup and common tasks, start with [Discord](/docs/channels/discord). The channel handles Discord's HTTP Interactions, including slash and application commands, message components, and modal submissions. Discord enforces a three-second ACK deadline, so the channel acknowledges each interaction right away and runs the eve work in the background. Vercel Connect keeps the bot token out of your environment and verifies Discord's signature before forwarding an interaction to eve. See [Channels](/docs/channels/overview) for the contract this channel builds on.
 
 ## Set up Discord
 
@@ -57,6 +57,32 @@ curl -X PUT "https://discord.com/api/v10/applications/$DISCORD_APPLICATION_ID/co
 ```
 
 Then configure the public `https://…/eve/v1/discord` route as the application's Interactions Endpoint URL. Pass `credentials: { applicationId, botToken, publicKey }` to `discordChannel`, or set the corresponding `DISCORD_APPLICATION_ID`, `DISCORD_BOT_TOKEN`, and `DISCORD_PUBLIC_KEY` environment variables.
+
+## Options
+
+`discordChannel(config)` takes these options. All are optional.
+
+| Option        | Default                                                                 | Description                                                                                                                                |
+| ------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `credentials` | `DISCORD_APPLICATION_ID`, `DISCORD_BOT_TOKEN`, and `DISCORD_PUBLIC_KEY` | From `connectDiscordCredentials(...)`, or `{ applicationId, botToken, publicKey, webhookVerifier }`.                                       |
+| `route`       | `/eve/v1/discord`                                                       | Interactions endpoint path.                                                                                                                |
+| `api`         | `https://discord.com/api/v10` and the global `fetch`                    | `{ apiBaseUrl, fetch }` for Discord REST calls.                                                                                            |
+| `turnPolicy`  | `"steer"`                                                               | `"steer"` or `"queue"` for messages that arrive during a turn.                                                                             |
+| `gateway`     | Off                                                                     | Mounts the Gateway route for ordinary messages. See the table below.                                                                       |
+| `onCommand`   | Dispatch with `defaultDiscordAuth`                                      | `(ctx, interaction)` hook for slash and application commands.                                                                              |
+| `onAnswers`   | The presser, unless `onCommand` is set                                  | `(ctx, interaction)` hook that authorizes button, select, and modal answers. With a custom `onCommand` and no `onAnswers`, eve drops them. |
+| `events`      | eve's default handlers                                                  | Per-event handler overrides.                                                                                                               |
+
+`gateway` takes these options:
+
+| Option                | Default                                       | Description                                                                                    |
+| --------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `gateway.route`       | `/eve/v1/discord/gateway`                     | Path the relay posts to.                                                                       |
+| `gateway.auth`        | `localDev()` and same-environment Vercel OIDC | Auth for relay requests. See [Run the relay outside Vercel](#run-the-relay-outside-vercel).    |
+| `gateway.onMessage`   | Answer addressed messages                     | `(ctx, message)` hook. See [Who the bot answers](#who-the-bot-answers).                        |
+| `gateway.startThread` | `true`                                        | `false`, `true`, or `{ name, autoArchiveMinutes }`. See [Reply in threads](#reply-in-threads). |
+
+The channel mounts `POST /eve/v1/discord`, plus `POST /eve/v1/discord/gateway` when `gateway` is set.
 
 ## Reply to DMs and mentions (experimental)
 
@@ -319,9 +345,7 @@ Scale the production daemon to zero while you do this. Every connection receives
 - Messages sent while no relay is connected are not delivered. On a deploy, Vercel sends `SIGTERM` to the old daemon and starts the new one at the same time. The old relay disconnects right away, so messages sent while the new daemon boots and connects, usually a few seconds, are lost. A crash or restart leaves the same gap. The relay does not resume the previous Gateway session in a new process, so Discord does not replay these messages.
 - `runDiscordGatewayRelay` drops a message, rather than retrying it, when eve answers with a `5xx`, takes longer than 30 seconds to accept it, or the connection fails after the request is sent. eve may have started the turn already, and a retry could answer twice. The relay logs each dropped message.
 
-## How the channel handles messages
-
-### Dispatch
+## Command hooks
 
 `onCommand(ctx, interaction)` decides whether to dispatch and under what `auth`. Return `{ auth }` to proceed, `null` to drop the interaction, or `title` alongside `auth` to set the title when the dispatch starts a run. By default, auth comes from the invoking user.
 
@@ -350,13 +374,13 @@ export default discordChannel({
 });
 ```
 
-### Delivery
+## Delivery
 
 The default `content.completed` handler edits the deferred response for the first reply part and sends followups after that. If the interaction token is rejected, it falls back to a bot-authenticated channel message. Long text is split to Discord's 2000-char limit, and generated messages default to `allowed_mentions: { parse: [] }`.
 
 Typing fires on `turn.started` and `call.requested`, but only when a bot token is present. In custom handlers, call `ctx.channel.discord.startTyping()` yourself.
 
-### Human-in-the-loop (HITL)
+## Human-in-the-loop (HITL)
 
 HITL renders as Discord components. Confirmations and options become buttons, `display: "select"` becomes a string select, and freeform input becomes a button that opens a modal. When the user responds, the parked session (paused awaiting input) resumes.
 
@@ -382,21 +406,21 @@ export default discordChannel({
 });
 ```
 
-### Connection sign-ins
+## Connection sign-ins
 
-When a connection needs the person to sign in, the default `authorization.required` handler posts it to the conversation. In a DM, the message includes a link button to the sign-in page and any confirmation code. In a server, the shared message only says who has to sign in and has a **Sign in** button. When someone presses it, eve identifies them the same way it does for HITL presses (`onInputResponse`). If that's the person who has to sign in, eve answers with an ephemeral message holding the link and code, which only they can see. Anyone else gets an ephemeral note that they can't open it. That way another member can't finish the sign-in with their own account and have it saved under the requester's identity. Once the sign-in completes or is cancelled, eve edits the message to say so and removes its button.
+When a connection needs the person to sign in, the default `interaction.opened` handler posts it to the conversation. In a DM, the message includes a link button to the sign-in page and any confirmation code. In a server, the shared message only says who has to sign in and has a **Sign in** button. When someone presses it, eve identifies them the same way it does for HITL presses (`onAnswers`). If that's the person who has to sign in, eve answers with an ephemeral message holding the link and code, which only they can see. Anyone else gets an ephemeral note that they can't open it. That way another member can't finish the sign-in with their own account and have it saved under the requester's identity. Once the sign-in completes or is cancelled, eve edits the message to say so and removes its button.
 
-If `onCommand` or `gateway.onMessage` gives people principals other than the default, set `onInputResponse` to the same mapping. Otherwise eve can't match a press to the person who has to sign in, and nobody can open the sign-in in a server.
+If `onCommand` or `gateway.onMessage` gives people principals other than the default, set `onAnswers` to the same mapping. Otherwise eve can't match a press to the person who has to sign in, and nobody can open the sign-in in a server.
 
-### Proactive sessions
+## Proactive sessions
 
 Start a session without an inbound interaction through `to(discord, target).send(message, { auth })` from a schedule `run` handler, or `ctx.to(discord, target).send(message, { auth })` from another channel. The proactive target shape is `{ channelId, conversationId?, initialMessage? }`. Either path needs a bot token, supplied by Connect or `DISCORD_BOT_TOKEN`.
 
-### Attachments
+## Attachments
 
 Files attached through a command's attachment options (type `11`) reach the agent as file parts. eve downloads each one from Discord's signed CDN URL (`cdn.discordapp.com` or `media.discordapp.net`) without credentials. A file over 25 MB, or one whose download fails, reaches the agent as a short note instead. Each command starts its own session, so a file is available in the conversation that command starts.
 
 ## What to read next
 
-- [Channels overview](./overview): the channel contract and every built-in channel
-- [Auth & route protection](../guides/auth-and-route-protection): authenticating inbound traffic
+- [Channels overview](/docs/channels/overview): the channel contract and every built-in channel
+- [Auth & route protection](/docs/guides/auth-and-route-protection): authenticating inbound traffic

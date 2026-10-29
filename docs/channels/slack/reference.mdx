@@ -1,12 +1,12 @@
 ---
-title: "Slack"
-description: "Reach your agent from Slack app mentions, DMs, slash commands, and interactive callbacks."
-type: integration
+title: "Slack Reference"
+description: "Slack channel options, credentials, inbound hooks, code channels, rendering, human-in-the-loop, proactive targets, and attachments."
+type: reference
 ---
 
-The Slack channel puts your agent inside a workspace. It handles `@mentions`, DMs, slash commands, shortcuts, and interactive callbacks; replies in threads; shows typing indicators; and turns human-in-the-loop (HITL) prompts into buttons. [Vercel Connect](https://vercel.com/kb/guide/vercel-connect) is the recommended setup: it manages the Slack bot token, verifies inbound requests, supports token rotation and multiple workspace installations, and forwards events to your agent without copying Slack secrets into your project environment. If you cannot use Vercel Connect, you can provide the bot token and signing secret through environment variables. See [Channels](./overview) for the contract this builds on.
+This page documents every part of `slackChannel` from `eve/channels/slack`. For setup and common tasks, start with [Slack](/docs/channels/slack). See [Channels](/docs/channels/overview) for the contract this channel builds on.
 
-## Add the channel
+## Setup and credentials
 
 Run the guided setup from your agent project:
 
@@ -41,7 +41,7 @@ Choose **Use portable credentials** when the agent does not run on Vercel or you
 
 A function-form `botToken` receives `{ teamId }`, the app installation workspace, so a self-managed multi-workspace app can select an installation: `credentials: { botToken: ({ teamId }) => loadInstallationToken(teamId) }`. Reject a missing `teamId` instead of falling back to a default installation.
 
-## Test a preview branch
+### Test a preview branch
 
 Create a second connector for preview traffic and route it to your preview branch:
 
@@ -73,34 +73,57 @@ export default slackChannel({
 
 Slack must reach the preview route without an authentication challenge. For a Connect trigger, exempt the branch domain with a [Deployment Protection Exception](https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection/deployment-protection-exceptions) or use an unprotected domain. For a Slack app using environment-variable credentials, append `?x-vercel-protection-bypass=your-generated-secret` to its event and interaction Request URLs. Enabling [Protection Bypass for Automation](https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection/protection-bypass-automation) does not help unless Slack sends the secret with each request.
 
-## Troubleshoot Slack delivery
+### Point the channel at a different Slack API host
 
-| Symptom                                                 | Next action                                                                                                                                                                  |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `eve add channel/slack` stops before finishing          | Fix the step the error names, then rerun `eve add channel/slack`.                                                                                                            |
-| Setup says the Slack app isn't installed in a workspace | Rerun `eve add channel/slack`. It opens the app's install page again; finish the install in your browser while setup waits.                                                  |
-| Setup says a connector is used by another project       | Let setup create a new Slack app for this agent. To keep the existing app, remove it from the other project in the Connect dashboard first.                                  |
-| Setup says the connector has too many destinations      | Remove a destination you no longer need in the Connect dashboard, then rerun setup.                                                                                          |
-| Mentions never reach the deployment                     | Rerun `eve add channel/slack` to repair the production destination. Check branch destinations in the Connect dashboard.                                                      |
-| A preview request receives an authentication page       | Exempt the branch domain from Deployment Protection, or add the automation bypass secret to a self-managed Slack app's event and interaction Request URLs.                   |
-| Mentions work but DMs or thread replies don't           | Add `message.im` and `im:history` for DMs, or the matching message event and history scope for channel replies, then reinstall the Slack app.                                |
-| A long response can't be uploaded as a snippet          | Add the `files:write` bot scope and reinstall the Slack app.                                                                                                                 |
-| The thread says the agent couldn't deliver its answer   | Search the Vercel runtime logs for the notice's error id. The `final reply was not delivered to Slack` line carries the error, including one thrown by an authored renderer. |
-| The webhook arrives but the agent doesn't reply         | Check the Vercel runtime logs, then the session in [**Agent Runs**](/docs/observability/agent-runs) when your team has access.                                               |
+```ts
+slackChannel({
+  api: {
+    apiBaseUrl: "https://slack-simulator.example/api/slack",
+    fetch: (input, init) => {
+      const headers = new Headers(init?.headers);
+      headers.set("x-vercel-protection-bypass", process.env.SLACK_SIMULATOR_BYPASS_SECRET ?? "");
+      return fetch(input, { ...init, headers });
+    },
+    fileBaseUrl: "https://slack-simulator.example/files",
+  },
+  credentials: { botToken: process.env.SLACK_BOT_TOKEN },
+});
+```
 
-## Audience
+The bases say where a call may go. `apiBaseUrl` is the base Slack Web API method names resolve against, and defaults to `https://slack.com/api/`. `fileBaseUrl` adds a base for attachment downloads and falls back to `apiBaseUrl`: a download URL under it is fetched with the bot token, in addition to `files.slack.com` and Enterprise Grid file URLs. eve downloads every other public `https:` URL without the bot token. Both bases must be absolute `http:` or `https:` URLs carrying no query string or fragment; `slackChannel()` throws on one that is not, naming the option. A missing trailing slash is added, so `https://sim.example/api` sends `chat.postMessage` to `https://sim.example/api/chat.postMessage`.
 
-Slack public channels are `public`; DMs, group DMs, and private channels are
-`private`. When an inbound event does not identify the conversation type, eve
-checks Slack and treats an ambiguous or failed lookup as `private`. The audience
-controls observability content capture, not access to the channel. See
-[Audience](./overview#audience) for the shared channel model.
+`api.fetch` says how the traffic travels. It replaces the global `fetch` for calls to the configured bases — use it to attach the per-call header a host behind an authenticating proxy requires, as the example does for a simulator behind Vercel Deployment Protection. eve confines it to those bases' origins, so that header reaches the simulator alone: `files.slack.com`, and any other host Slack names in a response or an inbound payload, keep the global `fetch`. A wrapper therefore attaches its credential unconditionally. With no base configured every call already goes to Slack's own hosts, and `api.fetch` carries all of them, which is what observes or stubs the traffic in a test.
 
-## How the channel handles inbound events
+## Options
 
-### Message hooks
+`slackChannel(config)` takes these options. All are optional.
 
-Message hooks return `{ auth }` to dispatch, `null` to drop, `{ auth, context }` to inject background into history, or `{ auth, history }` to add prior conversation as user and assistant turns (see [Start from prior history](./eve#start-from-prior-history)). Public conversations use the returned `title`, or the triggering message text when `title` is omitted. DMs and private channels always use `Private message` so the run title does not expose message details.
+| Option            | Default                                      | Description                                                                                                                                    |
+| ----------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `credentials`     | `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` | Bot token and inbound verification, from `connectSlackCredentials(...)` or `{ botToken, signingSecret, webhookVerifier }`.                     |
+| `route`           | `/eve/v1/slack`                              | Path for Events API, interactivity, and slash command requests.                                                                                |
+| `api`             | Slack's own hosts and the global `fetch`     | `{ apiBaseUrl, fileBaseUrl, fetch }`. See [Point the channel at a different Slack API host](#point-the-channel-at-a-different-slack-api-host). |
+| `botName`         | The channel name, cut to 35 characters       | App name in the generated Slack app manifest.                                                                                                  |
+| `turnPolicy`      | `"steer"`                                    | `"steer"` or `"queue"`. See [Control overlapping turns](#control-overlapping-turns).                                                           |
+| `threadContext`   | Off                                          | Load earlier thread replies. `{}` means `since: "thread-root"`. See [Load prior thread messages](#load-prior-thread-messages).                 |
+| `codeChannels`    | `false`                                      | Serve Slack code channels as one session each. See [Code channels](#code-channels).                                                            |
+| `uploadPolicy`    | Any media type, up to 25 MB                  | `"disabled"` or `{ maxBytes, allowedMediaTypes }` for inbound files.                                                                           |
+| `approvalChannel` | `"thread"`                                   | `(request, ctx) => "thread" \| "direct-message"`. See [Human-in-the-loop](#human-in-the-loop-hitl).                                            |
+| `renderers`       | eve's default renderer                       | Renderers that wrap eve's default. See [Customize rendering](#customize-rendering).                                                            |
+| `onAppMention`    | Dispatch with workspace-scoped auth          | `(ctx, message)` hook for `app_mention` events.                                                                                                |
+| `onDirectMessage` | Dispatch with workspace-scoped auth          | `(ctx, message)` hook for DMs.                                                                                                                 |
+| `onMessage`       | None                                         | `(ctx, message)` hook for other posted messages. See [Message hooks](#message-hooks).                                                          |
+| `onAnswers`       | Accept with `ctx.defaultAuth`                | `(ctx, submission)` hook that authorizes HITL answers.                                                                                         |
+| `onEvent`         | None                                         | `(ctx, event)` hook for other Events API callbacks. See [Other Events API callbacks](#other-events-api-callbacks).                             |
+| `onInteraction`   | None                                         | `(action, ctx)` hook for your own `block_actions` callbacks.                                                                                   |
+| `onShortcut`      | None                                         | `(shortcut, ctx)` hook for message and global shortcuts.                                                                                       |
+| `onSlashCommand`  | None                                         | `(command, ctx)` hook for slash commands.                                                                                                      |
+
+The channel mounts `POST /eve/v1/slack`. It reads `SLACK_BOT_TOKEN` when `credentials` has no bot token, and `SLACK_SIGNING_SECRET` when it has neither a signing secret nor a `webhookVerifier`.
+
+## Message hooks
+
+Message hooks return `{ auth }` to dispatch, `null` to drop, `{ auth, context }` to inject background into history, or `{ auth, history }` to add prior conversation as user and assistant turns (see [Start from prior history](/docs/channels/eve#start-from-prior-history)). Public conversations use the returned `title`, or the triggering message text when `title` is omitted. DMs and private channels always use `Private message` so the run title does not expose message details.
 
 - `onMessage(ctx, message)` handles newly posted Slack messages. eve drops messages authored by the installed app before this hook runs, preventing self-reply loops. Messages from other bots remain visible; check `message.author?.isBot` when those should also be ignored. `ctx.isBotMentioned()` and `ctx.isSubscribed()` support mention and active-thread policies.
 - `onAppMention(ctx, message)` handles only `app_mention` and takes precedence over `onMessage`. Its default derives workspace-scoped auth.
@@ -143,7 +166,7 @@ The model-visible `<slack_message>` includes `sender_id`, `bot_user_id` when ava
 
 When a Slack message includes a link preview, eve includes its attachment text in `<content>` alongside the sender's message, including when the link has words around it. Shared Slack messages work the same way: eve extracts the forwarded message body from Slack's message-unfurl attachment and keeps any top-level comment.
 
-#### Restrict who can invoke the agent
+### Restrict who can invoke the agent
 
 A valid Slack signature proves that Slack sent the event. It does not decide which channel or person your agent should trust. Fail closed in the inbound handler before returning auth, especially when the app is installed in a shared Slack Connect channel:
 
@@ -194,7 +217,7 @@ A message typed in a thread or DM never passes through `onAnswers`, so while it 
 
 If you omit `onAnswers`, Slack accepts HITL answers with the submitting user's auth, regardless of which message or event handlers you define. Define `onAnswers` when those handlers enforce an invocation policy that must also apply to HITL answers. Put sensitive prompts in conversations limited to the intended approvers, and re-check `ctx.session.auth.current` inside a sensitive tool before performing its side effect.
 
-#### Continue conversations without repeated mentions
+### Continue conversations without repeated mentions
 
 Use `onMessage` to handle explicit mentions and continue replies in threads with an active eve session:
 
@@ -228,7 +251,7 @@ async onMessage(ctx, message) {
 
 Like `threadContext`, this helper calls `conversations.replies` and requires the matching Slack history scope. It observes at most the first 50 messages of the thread, and a failed fetch is logged and swallowed, so the returned list may be empty or stale — treat an unexpected empty list as "don't route" rather than "no participants".
 
-#### Load prior thread messages
+### Load prior thread messages
 
 You get the triggering mention by default, but not the earlier replies in the thread. Enable `threadContext` to fetch and inject them with every message attributed by stable Slack user id. Use `since: "last-agent-reply"` so repeated mentions inject only what is new:
 
@@ -252,11 +275,11 @@ export default slackChannel({
 
 When the triggering message starts the thread's session, eve adds those replies as session history instead of a transcript. Replies from this installed app become assistant turns, and replies from people and other bots become user messages with their Slack user ids attached. If the agent posted a report and people replied to it, the new session sees that report as its own earlier turn. Slack shows rendered output rather than the model's original response, so these assistant turns can differ from what the model wrote. Later messages in the same thread keep the transcript behavior above. When a hook returns its own `history`, eve keeps the transcript and does not add thread replies as history.
 
-#### Control overlapping turns
+### Control overlapping turns
 
 Accepted Slack messages steer by default. Before assistant answer output or local tool execution begins, steering interrupts pending model generation and continues the same turn with the correction. Executing tools finish and checkpoint their results first; after answer output starts, steering waits for the next committed workflow boundary. Reasoning and search progress do not count as answer output, and interrupted provider-managed search may run again.
 
-Mentions and messages filtered before sending never reach the active turn. See [Overlapping messages](./overview#overlapping-messages) for deliveries ignored later by a channel's `deliver` hook. Set `turnPolicy: "queue"` when every active turn should finish:
+Mentions and messages filtered before sending never reach the active turn. See [Overlapping messages](/docs/channels/overview#overlapping-messages) for deliveries ignored later by a channel's `deliver` hook. Set `turnPolicy: "queue"` when every active turn should finish:
 
 ```ts title="agent/channels/slack.ts"
 export default slackChannel({
@@ -288,7 +311,7 @@ These calls are independent examples; a handler normally chooses one. `ctx.send(
 
 <a id="reset-a-conversation" />
 
-#### End a conversation
+### End a conversation
 
 Use the thread-bound `ctx.end({ reason? })` method to retire the conversation. End terminally retires the session that currently owns the thread, including any in-flight turn. The next delivered message starts a new session with fresh history, state, and a new session-scoped sandbox:
 
@@ -307,7 +330,9 @@ export default slackChannel({
 
 End returns a `Delivery` for the retiring session; `await delivery.result()` waits for retirement and address release. An already unowned thread throws `SessionNotActiveError`. Returning `null` after end consumes the triggering message as a command; return `{ auth }` instead to deliver that message as the first turn of the fresh session. Custom `onInteraction` handlers receive the same flat operations, which is useful for a New conversation button.
 
-#### Serve Slack code channels
+## Code channels
+
+### Serve Slack code channels
 
 A [Slack code channel](https://docs.slack.dev/ai/slack-code) is a channel dedicated to one agent task. eve serves the whole code channel as one session: every message in it, top-level or threaded, reaches the same session. Replies post top-level, or in the thread when someone writes in one. The session status stays on the channel either way. While a turn runs, eve sets the Slack session status to `processing` in place of the thread status line, `suspended` while the turn waits on a person, and `active` when the turn ends or is cancelled. When someone stops the session in Slack, eve cancels the active turn, or sets the status back to `active` when no turn is running.
 
@@ -331,7 +356,7 @@ A code channel someone opens from Slack's UI starts without the origin conversat
 
 eve detects a code channel with Slack's `conversations.info` API, so the app needs `channels:read` (and `groups:read` for private code channels). If the lookup fails, eve logs an error, serves the channel per thread, and retries the lookup a minute later. With `codeChannels` set, the generated app manifest enables the code channels feature, adds the `code_channels:manage`, `channels:history`, `channels:read`, `groups:history`, and `groups:read` bot scopes (plus `im:read` and `mpim:read`, so eve can read a DM or group DM origin), and subscribes to the `message.session` and `agent_session_stopped` events. For Vercel Connect, add the same scopes and events under **Advanced** when you create the connector. To tell whether you're in a code channel, use `ctx.slack.codeChannel` in message hooks and `channel.state.codeChannel` in [renderers](#customize-rendering).
 
-#### Open a code channel from a thread
+### Open a code channel from a thread
 
 To let the agent move a request that needs more than one message into a new code channel, give it a tool that calls `openCodeChannel()` with your Slack channel:
 
@@ -365,7 +390,7 @@ It needs `codeChannels: true` on the Slack channel you pass. Outside Slack or in
 
 One person gets one code channel per message. A retried tool call reaches the same channel and session once. A second call for the same message reaches the same channel and delivers the conversation again, so a session someone started by writing in the new channel first still gets the thread's history.
 
-#### Build your own code channel tool
+### Build your own code channel tool
 
 To change more than the description and inputs, send to the Slack channel with a `codeChannel` target yourself. `ctx.channel.metadata` names the Slack conversation the tool was called from: `channelId` and `threadTs`. In a code channel, `threadTs` is `null`. The metadata doesn't depend on the session's auth, so the tool keeps working when a message hook returns its own `auth`:
 
@@ -400,7 +425,7 @@ export default defineTool({
 
 `codeChannel` takes the origin message's `originTs`, its thread's `originThreadTs`, and optionally the channel's `name`; without one, Slack names the channel from the message. The new channel gets the origin's privacy, and its session's audience follows it. A tool, route, schedule, or `onEvent` handler can open one from any message the app can see, so pass the origin of the conversation the tool was called from, as `openCodeChannel()` does. Pass `history` to start the code channel's session with earlier messages; `openCodeChannel()` passes the text of `ctx.messages`.
 
-#### Open a code channel from a message hook
+### Open a code channel from a message hook
 
 To open a code channel without the model deciding, call `ctx.openCodeChannel({ name })` in `onAppMention`, `onDirectMessage`, or `onMessage`. It opens the channel from the inbound message and returns the same session operations as `ctx`, bound to the code channel's session. Send the first turn there and return `null`, so the thread gets no turn. For example, an agent that works only in code channels:
 
@@ -425,9 +450,9 @@ The returned `send` defaults to the message author's auth and moves Slack auth y
 
 Unlike the tool, `ctx.openCodeChannel()` copies no conversation: the code channel's session starts with only what you send. Pass `history` to `send` if it should see earlier messages, such as the thread's replies. `ctx.openCodeChannel()` opens the channel the same way as a `codeChannel` target: one channel per author and message, the origin's privacy, and the session's audience from it. It throws without `codeChannels: true`, for a message already in a code channel, and when Slack refuses to create the channel, like the other `ctx` operations.
 
-### Other Events API callbacks
+## Other Events API callbacks
 
-Use `onEvent` for subscribed events such as `reaction_added`, `team_join`, or `channel_created`. It receives the raw, open-ended Slack event and owns control flow. Call `ctx.send(message, { target, auth, ...options })` zero, one, or many times to start turns. It takes the same options as [`to().send()`](./custom#cross-channel-hand-off), such as `title`, which sets the run title without changing the message sent to the model, `history`, which adds prior conversation before the message (see [Start from prior history](./eve#start-from-prior-history)), and `idempotencyKey`. Each call returns a delivery receipt; use its `sessionId` to attach a session handle.
+Use `onEvent` for subscribed events such as `reaction_added`, `team_join`, or `channel_created`. It receives the raw, open-ended Slack event and owns control flow. Call `ctx.send(message, { target, auth, ...options })` zero, one, or many times to start turns. It takes the same options as [`to().send()`](/docs/channels/custom#cross-channel-hand-off), such as `title`, which sets the run title without changing the message sent to the model, `history`, which adds prior conversation before the message (see [Start from prior history](/docs/channels/eve#start-from-prior-history)), and `idempotencyKey`. Each call returns a delivery receipt; use its `sessionId` to attach a session handle.
 
 ```ts title="agent/channels/slack.ts"
 import { connectSlackCredentials } from "@vercel/connect/eve";
@@ -477,7 +502,7 @@ For a [code channel](#serve-slack-code-channels)'s session, which spans all of i
 
 `onEvent` covers JSON `event_callback` deliveries only. URL verification, slash commands, and interactive payloads do not reach it. Slash commands reach `onSlashCommand`; add every desired event and required OAuth scope to the Slack app's Event Subscriptions configuration so other callbacks reach their handlers.
 
-### Slack API calls outside a handler
+## Slack API calls outside a handler
 
 Inside inbound webhook handlers such as `onAppMention`, `onEvent`, `onInteraction`, `onShortcut`, `onSlashCommand`, and `onAnswers`, `ctx.slack.request(operation, body)` is the raw-API escape hatch. Inside a [renderer](#customize-rendering)'s event handler, use `ctx.channel.slack.request(...)` instead. Outside those contexts there is no handle — a schedule resolving reactions on old
 messages, for example, has no inbound Slack request. For that, call the
@@ -509,28 +534,7 @@ confined the same way, so a call made without a channel carries the same guarant
 `resolveSlackBotToken` materializes a `SlackBotToken` to a string when you need the
 bearer token itself.
 
-### Point the channel at a different Slack API host
-
-```ts
-slackChannel({
-  api: {
-    apiBaseUrl: "https://slack-simulator.example/api/slack",
-    fetch: (input, init) => {
-      const headers = new Headers(init?.headers);
-      headers.set("x-vercel-protection-bypass", process.env.SLACK_SIMULATOR_BYPASS_SECRET ?? "");
-      return fetch(input, { ...init, headers });
-    },
-    fileBaseUrl: "https://slack-simulator.example/files",
-  },
-  credentials: { botToken: process.env.SLACK_BOT_TOKEN },
-});
-```
-
-The bases say where a call may go. `apiBaseUrl` is the base Slack Web API method names resolve against, and defaults to `https://slack.com/api/`. `fileBaseUrl` adds a base for attachment downloads and falls back to `apiBaseUrl`: a download URL under it is fetched with the bot token, in addition to `files.slack.com` and Enterprise Grid file URLs. eve downloads every other public `https:` URL without the bot token. Both bases must be absolute `http:` or `https:` URLs carrying no query string or fragment; `slackChannel()` throws on one that is not, naming the option. A missing trailing slash is added, so `https://sim.example/api` sends `chat.postMessage` to `https://sim.example/api/chat.postMessage`.
-
-`api.fetch` says how the traffic travels. It replaces the global `fetch` for calls to the configured bases — use it to attach the per-call header a host behind an authenticating proxy requires, as the example does for a simulator behind Vercel Deployment Protection. eve confines it to those bases' origins, so that header reaches the simulator alone: `files.slack.com`, and any other host Slack names in a response or an inbound payload, keep the global `fetch`. A wrapper therefore attaches its credential unconditionally. With no base configured every call already goes to Slack's own hosts, and `api.fetch` carries all of them, which is what observes or stubs the traffic in a test.
-
-### Delivery
+## Delivery
 
 eve shows an agent's progress in two places. Short work, such as thinking or a tool call, appears in the thread status and never posts a message. [Tasks](/docs/tools/tasks), which keep working while the conversation continues, appear in a task card: one message per turn that eve updates in place. Replies post as ordinary messages, so the thread holds the conversation, the task card, and nothing else.
 
@@ -567,7 +571,7 @@ When the model replies while its tasks keep working, including text it writes be
 
 Outbound text preserves bare `@` tokens as literal text. To mention a user, embed Slack's `<@USER_ID>` syntax directly or use `ctx.channel.thread.mentionUser(userId)` in a renderer.
 
-### Task card
+## Task card
 
 When a turn starts its first task, eve posts a task card in the thread and keeps it current until the turn and its tasks finish. One task renders as a Slack `task_card` block; two or more render as a `plan` block with one row per task the turn started. What an agent task does on its own, including the tasks it starts, stays inside that task and does not add rows. The card needs no configuration beyond the `chat:write` scope the channel already uses.
 
@@ -583,7 +587,7 @@ A turn stays open while its tasks work, so messages you send during that time co
 
 eve writes the card from the session's own events as they happen, and only when it changed. A failed Slack call never fails the turn: eve tries a failed write once more after a second, then again on the turn's next change. If someone deletes the card, eve posts it again on its next change. Card posts never unfurl links. Schedule sessions and sessions without a Slack thread get no card.
 
-### Customize rendering
+## Customize rendering
 
 Without `renderers`, eve renders everything above with its default renderer. Pass `renderers` to change what the agent posts without replacing that default. Each renderer wraps the ones after it, ending with eve's default renderer, and has four optional parts:
 
@@ -730,7 +734,7 @@ If `interactionCard` throws or breaks these rules, eve logs it and renders that 
 
 Renderers run in the order you list them, and the first one is outermost. `onInteraction` receives clicks on buttons a renderer posts, such as the feedback buttons above.
 
-### Show your own tool on the task card
+## Show your own tool on the task card
 
 A renderer can draw any of the turn's tool calls from their input. For example, give the agent a `plan` tool that records a checklist, and show the checklist ahead of eve's task rows:
 
@@ -799,7 +803,7 @@ export default slackChannel({ renderers: [plan] });
 
 A turn that only plans gets a card too, because `taskCard` runs for every turn that calls a tool.
 
-### Human-in-the-loop (HITL)
+## Human-in-the-loop (HITL)
 
 HITL renders as Slack buttons and selects. Fixed-choice actions and freeform modal submissions pass through `onAnswers` before the parked session resumes. The initial **Type your answer** action only opens eve's modal; the hook runs when the user submits an answer.
 
@@ -859,7 +863,7 @@ export default slackChannel({
 });
 ```
 
-#### Render and decode HITL controls yourself
+### Render and decode HITL controls yourself
 
 `eve/channels/slack` exports the helpers eve uses for its own HITL controls. `renderInteractionBlocks(request, route?)` returns the Block Kit blocks for one `Interaction`. `answerFromSlackAction(action)` decodes a click on those blocks into `{ response, kind?, route? }`, where `response` is the eve `Answer`, or returns `null` for any other action. Every eve-owned control's `action_id` starts with `ANSWER_ACTION_PREFIX` (`"eve_input:"`), so give your own buttons a different prefix to keep them routed to `onInteraction`.
 
@@ -902,7 +906,7 @@ renderers: [
 
 The private authorization button uses the label **Sign in**, so long connection display names do not make the button invalid. The public status identifies the connection.
 
-### Cards
+## Cards
 
 Use the card builders from `eve/channels/slack` for typed message layouts, or pass raw Slack blocks with `{ blocks, text }`. Cards are plain data, not JSX components.
 
@@ -940,9 +944,9 @@ Handle your own button and select callbacks in `onInteraction`. To build eve-own
 
 Message cards do not support modals, text inputs, or external selects. Use `CardText` for labels. For custom modals, send native Slack view data with `ctx.slack.request("views.open", ...)`; see [interactive callbacks](#message-hooks).
 
-### Proactive sessions
+## Proactive sessions
 
-Start a Slack conversation from a [webhook on another channel](./custom#cross-channel-hand-off), a [schedule](../schedules#handler-form-run), or a [tool](../tools#start-channel-sessions-ctxto), without waiting for someone to message the app. To copy an existing conversation into a new thread or someone's direct messages, see [Fork conversations into a new thread](../patterns/fork-conversations-into-new-threads).
+Start a Slack conversation from a [webhook on another channel](/docs/channels/custom#cross-channel-hand-off), a [schedule](/docs/schedules#handler-form-run), or a [tool](/docs/tools#start-channel-sessions-ctxto), without waiting for someone to message the app. To copy an existing conversation into a new thread or someone's direct messages, see [Fork conversations into a new thread](/docs/patterns/fork-conversations-into-new-threads).
 
 Pass `{ channelId }` as the target to start a new thread. The agent's first post becomes the thread's root message. You can also set these target fields:
 
@@ -979,15 +983,15 @@ The root is posted before the agent runs; the agent's replies appear under it. T
 
 For a Slack post without an agent turn, use `ctx.thread.post(...)` in an inbound handler or `ctx.channel.thread.post(...)` in a renderer's event handler. Outside a handler, use [`callSlackApi(...)`](#slack-api-calls-outside-a-handler).
 
-### Attachments
+## Attachments
 
-Inbound files behind authenticated Slack URLs are staged with `fetchFile`. See [File uploads](./custom#file-uploads) for the `fetchFile` contract.
+Inbound files behind authenticated Slack URLs are staged with `fetchFile`. See [File uploads](/docs/channels/custom#file-uploads) for the `fetchFile` contract.
 
 The agent receives the files attached to the message that reaches it. When a mention carries no files, eve also collects the files posted in the thread since the previous mention of the app, up to 10 messages back, so a person can share a file and then ask about it in a follow-up. This works for mentions up to 1,000 replies into a thread. The app's own messages are skipped. A DM, or a thread where the app answers without a mention, gets no lookback, because each earlier message brought its own files.
 
-Images, PDFs, audio, video, and other files all reach the agent. See [Inbound attachments](../sandbox#inbound-attachments) for which files the model reads directly and which it opens with tools. Files shared through an integration such as Google Drive or Dropbox are links to the other service, not Slack files, so eve skips them; their link stays in the message text. A download that fails or takes longer than 30 seconds reaches the model as a note.
+Images, PDFs, audio, video, and other files all reach the agent. See [Inbound attachments](/docs/sandbox#inbound-attachments) for which files the model reads directly and which it opens with tools. Files shared through an integration such as Google Drive or Dropbox are links to the other service, not Slack files, so eve skips them; their link stays in the message text. A download that fails or takes longer than 30 seconds reaches the model as a note.
 
-Slack voice clips reach the model as an audio file label, not as sound. To answer them, give the agent a transcription tool; see [Voice notes](../patterns/voice-notes).
+Slack voice clips reach the model as an audio file label, not as sound. To answer them, give the agent a transcription tool; see [Voice notes](/docs/patterns/voice-notes).
 
 Private file downloads resolve credentials from the session's app installation workspace and require the Slack bot token's `files:read` scope. Add the scope and reinstall the Slack app before sending attachments.
 
@@ -995,7 +999,30 @@ Downloads cover Slack's own file hosts plus URLs under a configured [`api.fileBa
 
 Staged files live in the session sandbox under `/workspace/.eve/attachments`. Session history keeps a reference to that path, not a second copy of the Slack file. If the backend can no longer reattach the original sandbox, eve cannot restore the attachment bytes from history; later turns receive a missing-file result. Store files outside the sandbox when the agent must retain them independently of sandbox availability.
 
+## Audience
+
+Slack public channels are `public`; DMs, group DMs, and private channels are
+`private`. When an inbound event does not identify the conversation type, eve
+checks Slack and treats an ambiguous or failed lookup as `private`. The audience
+controls observability content capture, not access to the channel. See
+[Audience](/docs/channels/overview#audience) for the shared channel model.
+
+## Troubleshoot Slack delivery
+
+| Symptom                                                 | Next action                                                                                                                                                                  |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `eve add channel/slack` stops before finishing          | Fix the step the error names, then rerun `eve add channel/slack`.                                                                                                            |
+| Setup says the Slack app isn't installed in a workspace | Rerun `eve add channel/slack`. It opens the app's install page again; finish the install in your browser while setup waits.                                                  |
+| Setup says a connector is used by another project       | Let setup create a new Slack app for this agent. To keep the existing app, remove it from the other project in the Connect dashboard first.                                  |
+| Setup says the connector has too many destinations      | Remove a destination you no longer need in the Connect dashboard, then rerun setup.                                                                                          |
+| Mentions never reach the deployment                     | Rerun `eve add channel/slack` to repair the production destination. Check branch destinations in the Connect dashboard.                                                      |
+| A preview request receives an authentication page       | Exempt the branch domain from Deployment Protection, or add the automation bypass secret to a self-managed Slack app's event and interaction Request URLs.                   |
+| Mentions work but DMs or thread replies don't           | Add `message.im` and `im:history` for DMs, or the matching message event and history scope for channel replies, then reinstall the Slack app.                                |
+| A long response can't be uploaded as a snippet          | Add the `files:write` bot scope and reinstall the Slack app.                                                                                                                 |
+| The thread says the agent couldn't deliver its answer   | Search the Vercel runtime logs for the notice's error id. The `final reply was not delivered to Slack` line carries the error, including one thrown by an authored renderer. |
+| The webhook arrives but the agent doesn't reply         | Check the Vercel runtime logs, then the session in [**Agent Runs**](/docs/observability/agent-runs) when your team has access.                                               |
+
 ## What to read next
 
-- [Channels overview](./overview): the channel contract and every built-in channel
-- [Auth & route protection](../guides/auth-and-route-protection): authenticating inbound traffic
+- [Channels overview](/docs/channels/overview): the channel contract and every built-in channel
+- [Auth & route protection](/docs/guides/auth-and-route-protection): authenticating inbound traffic

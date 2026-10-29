@@ -217,7 +217,7 @@ A question or sign-in from a task, such as an agent's question, pauses the turn 
 the stream emits `interaction.opened`, then `turn.paused` awaiting it, and the turn continues once
 the question is answered or sign-in completes.
 
-`send(...).result()` waits through task work for the final reply, but stops at an interaction with `status: "awaiting-input"`. Answer through `respond()`; see [Aggregate a turn](/docs/guides/client/streaming#aggregate-a-turn). [Slack](/docs/channels/slack#task-card) also displays task activity.
+`send(...).result()` waits through task work for the final reply, but stops at an interaction with `status: "awaiting-input"`. Answer through `respond()`; see [Aggregate a turn](/docs/guides/client/streaming#aggregate-a-turn). [Slack](/docs/channels/slack/reference#task-card) also displays task activity.
 
 A steering message from the turn's own caller, one sent with `turnPolicy: "steer"`, the default,
 ends an `eve__task_wait` and aborts the `abortSignal` of any `execute` call the turn waits on, but it

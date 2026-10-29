@@ -106,11 +106,21 @@ Without per-person `auth`, the thread gets a notice to continue in a direct mess
 
 Send to the channel from a [schedule](/docs/schedules#handler-form-run) or [another channel](/docs/channels/custom#cross-channel-hand-off). Target a serialized Chat SDK thread, or `{ adapterName, threadId }`:
 
-```ts
-await to(channel, { adapterName: "resend", threadId: "resend:user@example.com" }).send(
-  "Your weekly digest is ready.",
-  { auth: null },
-);
+```ts title="agent/schedules/weekly-digest.ts"
+import { defineSchedule } from "eve/schedules";
+import { channel } from "../channels/resend";
+
+export default defineSchedule({
+  cron: "0 9 * * 1",
+  async run({ to, waitUntil }) {
+    waitUntil(
+      to(channel, { adapterName: "resend", threadId: "resend:user@example.com" }).send(
+        "Your weekly digest is ready.",
+        { auth: null },
+      ),
+    );
+  },
+});
 ```
 
 ## Forward attachments

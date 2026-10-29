@@ -50,7 +50,7 @@ Thread follow-ups without a mention need the privileged **Message Content** inte
 
 ## Choose who the bot answers
 
-`gateway.onMessage` runs for every message from a person. Return `{ auth }` to start a turn, or `null` to ignore the message. `message.addressed` says whether the default would answer. This one answers only in one server:
+`gateway.onMessage` runs for every Gateway message from a person. Return `{ auth }` to start a turn, or `null` to ignore the message. `message.addressed` says whether the default would answer. This one answers messages only in one server:
 
 ```ts title="agent/channels/discord.ts"
 import { defaultDiscordMessageAuth, discordChannel } from "eve/channels/discord";
@@ -65,7 +65,7 @@ export default discordChannel({
 });
 ```
 
-Slash commands go through `onCommand` instead. If you set `onCommand`, also set `onAnswers` with the same rule, or eve drops every button press. See [Human-in-the-loop](/docs/channels/discord/reference#human-in-the-loop-hitl).
+Slash commands go through `onCommand` instead, so filter them there too. If you set `onCommand`, also set `onAnswers` with the same rule, or eve drops every button press. See [Human-in-the-loop](/docs/channels/discord/reference#human-in-the-loop-hitl).
 
 ## Ask for approval
 

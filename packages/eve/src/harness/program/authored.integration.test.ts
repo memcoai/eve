@@ -496,6 +496,57 @@ describe.each([
     expect(systems[0]).not.toContain("Mention the roadmap.");
   });
 
+  it("shortens a large tool result in history before the model reads it", async () => {
+    const big = "row ".repeat(12_500);
+    const prompts: string[] = [];
+    const { events, reply } = await firstTurn({
+      harness: (ctx) => ({
+        agent: {
+          tools: (declared) => ({
+            ...declared,
+            export_rows: defineTool({
+              description: "Export Alice's rows.",
+              execute: async () => ({ rows: big }),
+              inputSchema: {},
+            }),
+          }),
+        },
+        history: () =>
+          ctx.history.map((message) =>
+            message.role !== "tool"
+              ? message
+              : {
+                  ...message,
+                  content: message.content.map((part) =>
+                    part.type === "tool-result" && JSON.stringify(part.output).length > 1_000
+                      ? {
+                          ...part,
+                          output: { type: "text" as const, value: "(12,500 rows exported)" },
+                        }
+                      : part,
+                  ),
+                },
+          ),
+      }),
+      message: "Export Alice's rows.",
+      model: model("gpt-5.5", (options) => {
+        prompts.push(JSON.stringify(options.prompt));
+        return options.prompt.at(-1)?.role === "tool"
+          ? textStreamResult("Exported.")
+          : toolCallStreamResult({ input: "{}", toolCallId: "call-1", toolName: "export_rows" });
+      }),
+    });
+
+    expect(reply).toBe("Exported.");
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("(12,500 rows exported)");
+    expect(prompts[1]).not.toContain("row row row");
+    // The model hadn't read the result, so shortening it rewrote nothing.
+    expect(filterEventsByType(events, "context.started")).toEqual([]);
+    const [settled] = filterEventsByType(events, "call.settled");
+    expect(JSON.stringify(settled!.data)).toContain("row row row");
+  });
+
   it("runs the model it chooses in place of the agent's", async () => {
     const reply = await firstReply({
       harness: () => ({

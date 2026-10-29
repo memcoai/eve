@@ -11,13 +11,18 @@ import { estimateTokens } from "#harness/token-estimate.js";
 
 /**
  * A program's history, checked before it replaces the session's: every user message keeps its
- * kind, no call loses its result, a checkpoint opens the history, and an automatic result keeps
- * the turn's input and fits.
+ * kind, no call loses its result, a checkpoint opens the history, a running turn's input stays, and
+ * it fits the model's window.
  */
 export function checkHistory(
   before: readonly HarnessModelMessage[],
   after: readonly ModelMessage[],
-  input: { readonly automatic: boolean; readonly limit: number },
+  input: {
+    /** A turn is running, so its latest input must stay: the model answers it next. */
+    readonly keepInput: boolean;
+    /** The history's room in the call. */
+    readonly limit: number;
+  },
 ): HarnessModelMessage[] {
   let messages: HarnessModelMessage[];
   try {
@@ -53,7 +58,7 @@ export function checkHistory(
     (message) => isUserModelMessage(message) && message.kind === "user",
   );
   if (
-    input.automatic &&
+    input.keepInput &&
     turnInput !== undefined &&
     !messages.some((message) => JSON.stringify(message) === JSON.stringify(turnInput))
   ) {
@@ -62,7 +67,7 @@ export function checkHistory(
     );
   }
   const size = estimateTokens(messages);
-  if (input.automatic && size > input.limit) {
+  if (size > input.limit) {
     throw new CompactionOverLimitError(
       `The session program's history is ~${Math.round(size)} tokens; the limit is ~${Math.round(input.limit)}.`,
     );

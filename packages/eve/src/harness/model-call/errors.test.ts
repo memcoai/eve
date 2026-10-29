@@ -6,6 +6,7 @@ import {
   EmptyModelResponseError,
   extractModelCallErrorDetails,
   extractUnsupportedProviderToolTypes,
+  isContextOverflow,
   isNoOutputGeneratedError,
   ModelStreamStalledError,
   normalizeModelStreamError,
@@ -746,5 +747,33 @@ describe("extractModelCallErrorDetails", () => {
       upstreamStatusCode: 400,
       upstreamType: "invalid_request_error",
     });
+  });
+});
+
+describe("isContextOverflow", () => {
+  it("recognizes a prompt the model's window can't hold, as providers word it", () => {
+    for (const message of [
+      "This model's maximum context length is 128000 tokens. However, your messages resulted in 130512 tokens.",
+      "prompt is too long: 205000 tokens > 200000 maximum",
+      "The input token count (1100000) exceeds the maximum number of tokens allowed (1048576).",
+      "Input is too long for requested model.",
+    ]) {
+      expect(isContextOverflow(new Error(message))).toBe(true);
+    }
+    expect(
+      isContextOverflow(new Error("Bad request", { cause: { code: "context_length_exceeded" } })),
+    ).toBe(false);
+    expect(
+      isContextOverflow(
+        new Error("Bad request", {
+          cause: { responseBody: '{"error":{"code":"context_length_exceeded"}}' },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves rate limits and other rejections alone", () => {
+    expect(isContextOverflow(new Error("Rate limit: too many tokens per minute"))).toBe(false);
+    expect(isContextOverflow(new Error("Invalid API key"))).toBe(false);
   });
 });

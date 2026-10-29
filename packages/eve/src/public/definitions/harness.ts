@@ -18,12 +18,15 @@ export interface HarnessModelStep {
   readonly endsTurn: boolean;
 }
 
-/** Where eve has to shrink the history: what asked, and eve's own way of doing it. */
-export interface HarnessCompaction {
-  /** `automatic`: the prompt eve measured is over the threshold. `manual`: `session.compact()`. */
-  readonly reason: "automatic" | "manual";
-  /** eve's compaction: older turns become a summary checkpoint, and recent ones stay whole. */
-  native(history: readonly HistoryMessage[]): Promise<HistoryMessage[]>;
+/** How big the next model call is, as eve estimates it before sending it. */
+export interface HarnessSize {
+  /** The call's estimated input tokens: instructions, tools, and the history. */
+  readonly tokens: number;
+  /**
+   * The model's context window, when eve knows it. After the provider rejected a prompt for its
+   * size, at most what that prompt held.
+   */
+  readonly window?: number;
 }
 
 /** A call the running turn made, as the session's view has it. */
@@ -56,8 +59,19 @@ export interface HarnessContext extends SessionFrame {
   readonly calls: readonly HarnessCall[];
   /** The model step that just ended, where eve decides after one. Absent at the turn's start. */
   readonly lastStep?: HarnessModelStep;
-  /** Present where eve has to shrink the history. */
-  readonly compaction?: HarnessCompaction;
+  /** The next model call's size, where eve asks for the history. */
+  readonly size?: HarnessSize;
+  /** `session.compact()` asked for a compaction, where eve asks for the history. */
+  readonly compact?: true;
+  /**
+   * eve's summary of older turns: a checkpoint, then the recent turns whole. `tokens` is the
+   * call's size to aim under; eve's own threshold when absent. Only in `history`; elsewhere it
+   * throws.
+   */
+  summarize(
+    history: readonly HistoryMessage[],
+    options?: { readonly tokens?: number },
+  ): Promise<HistoryMessage[]>;
 }
 
 /** What the turn does next. */
@@ -143,8 +157,11 @@ export function declaredToolName(value: unknown): string | undefined {
 export interface HarnessPlan {
   readonly agent?: HarnessAgent;
   /**
-   * The history the session keeps. eve reads it only where it has to shrink the history, and
-   * checks what it gets unless it's what `ctx.compaction.native` returned.
+   * What the model reads about the past, which becomes the session's history. eve asks before
+   * each model call and for `session.compact()`. A change to messages the model hasn't read yet
+   * joins the history; a change to ones it has read is a rewrite, which eve checks. Asked again
+   * about what it returned, it must return the same. `undefined` is eve's own: summarize past the
+   * threshold, or the history as it is.
    */
   readonly history?: Lazy<readonly HistoryMessage[] | undefined>;
   /**

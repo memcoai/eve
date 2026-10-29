@@ -105,6 +105,7 @@ async function runTurn(
       prompts.push(lastUserText(prompt));
       fullPrompts.push(prompt);
       const answer = answers[Math.min(prompts.length, answers.length) - 1];
+      if (answer instanceof Error) throw answer;
       return outputSchema === undefined ? reply(String(answer)) : deliver(answer);
     },
   });
@@ -473,28 +474,41 @@ describe("a session program at the turn's start", () => {
   });
 });
 
-/** eve's own loop, with `history` in place of eve's compaction. */
-function compacting(history: (ctx: ProgramContext) => ProgramContext["history"]): Program {
-  return (ctx) => ({
-    ...nativeProgram(ctx),
-    ...(ctx.compaction !== undefined && { history: () => history(ctx) }),
-  });
+/** eve's own loop, with `history` deciding what the model reads about the past. */
+function withHistory(
+  history: (ctx: ProgramContext) => ProgramContext["history"] | undefined,
+): Program {
+  return (ctx) => ({ ...nativeProgram(ctx), history: () => history(ctx) });
 }
 
+/** What a provider says when a prompt doesn't fit the model's window. */
+const tooLong = () => new Error("prompt is too long: 205000 tokens > 200000 maximum");
+
 describe("a session program's history", () => {
-  it("replaces eve's compaction where eve measures the prompt over the threshold", async () => {
+  it("is asked before every model call, with the call's size", async () => {
     const seen: unknown[] = [];
-    const { events, fullPrompts, issues, result } = await runTurn(
-      compacting((ctx) => {
-        seen.push({ reason: ctx.compaction?.reason, turn: ctx.turn?.id });
-        // Drop every earlier exchange, keeping the question the model answers next.
-        return ctx.history.slice(-1);
+    const { events, result } = await runTurn(
+      withHistory((ctx) => {
+        seen.push({ compact: ctx.compact, sized: (ctx.size?.tokens ?? 0) > 0 });
+        return ctx.history;
       }),
-      ["Two court cases back it."],
-      { history: older, threshold: 600 },
+      ["Two court cases back it.", "Two court cases back it [1]."],
+      { history: older },
     );
 
-    expect(seen).toEqual([{ reason: "automatic", turn: "turn_0" }]);
+    expect(seen).toEqual([{ compact: undefined, sized: true }]);
+    expect(events.filter((event) => event.type === "context.started")).toEqual([]);
+    expect(result.session.history.slice(0, older.length)).toEqual(older);
+  });
+
+  it("rewrites what the model has read, as a change, when it returns something else", async () => {
+    const { events, fullPrompts, issues, result } = await runTurn(
+      // Drop every earlier exchange past 600 tokens, keeping the question the model answers next.
+      withHistory((ctx) => (ctx.size!.tokens > 600 ? ctx.history.slice(-1) : ctx.history)),
+      ["Two court cases back it."],
+      { history: older },
+    );
+
     expect(JSON.stringify(fullPrompts[0])).not.toContain("Earlier question");
     expect(lastUserText(fullPrompts[0]!)).toBe("Which sources back the second claim?");
     expect(events.filter((event) => event.type === "context.settled")).toMatchObject([
@@ -508,31 +522,35 @@ describe("a session program's history", () => {
     expect(issues).toEqual([]);
   });
 
-  it("is read for session.compact(), between turns", async () => {
+  it("is asked for session.compact(), between turns", async () => {
     const seen: unknown[] = [];
     const { events, result } = await runTurn(
-      compacting((ctx) => {
-        seen.push({ reason: ctx.compaction?.reason, turn: ctx.turn });
-        return ctx.history.slice(-2);
+      withHistory((ctx) => {
+        seen.push({ compact: ctx.compact, turn: ctx.turn });
+        return ctx.compact === true ? ctx.history.slice(-2) : ctx.history;
       }),
       [],
       { compactOnly: true, history: older },
     );
 
-    expect(seen).toEqual([{ reason: "manual", turn: null }]);
+    // The second is eve checking that the program keeps what it returned.
+    expect(seen).toEqual([
+      { compact: true, turn: null },
+      { compact: undefined, turn: null },
+    ]);
     expect(events.filter((event) => event.type === "context.settled")).toMatchObject([
       { data: { kind: "compaction", outcome: "completed" } },
     ]);
     expect(result.session.history).toEqual(older.slice(-2));
   });
 
-  it("fails the change when an automatic history drops the turn's input", async () => {
+  it("fails the change when a rewrite drops the turn's input", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     const { events, prompts } = await runTurn(
-      compacting((ctx) => ctx.history.slice(0, 2)),
+      withHistory((ctx) => (ctx.size!.tokens > 600 ? ctx.history.slice(0, 2) : ctx.history)),
       ["Two court cases back it."],
-      { history: older, threshold: 600 },
+      { history: older },
     );
 
     expect(prompts).toEqual([]);
@@ -546,22 +564,83 @@ describe("a session program's history", () => {
     ]);
   });
 
-  it("fails the change with a generic error when the program's history throws", async () => {
+  it("fails the turn when it keeps rewriting what it returned", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
+    let asked = 0;
 
     const { events, prompts } = await runTurn(
-      compacting(() => {
-        throw new Error("summary service at 10.0.0.7 is down");
-      }),
+      // A different first answer each time it's asked.
+      withHistory((ctx) => [
+        { content: `Earlier answer, revision ${++asked}.`, role: "assistant" as const },
+        ...ctx.history.slice(1),
+      ]),
       ["Two court cases back it."],
-      { history: older, threshold: 600 },
+      { history: older },
     );
 
     expect(prompts).toEqual([]);
     expect(events.filter((event) => event.type === "context.settled")).toMatchObject([
-      { data: { error: { message: "The agent's program failed." }, outcome: "failed" } },
+      {
+        data: {
+          error: { message: expect.stringContaining("changes what it returned") },
+          outcome: "failed",
+        },
+      },
     ]);
+  });
+
+  it("fails the turn with a generic error when the program's history throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { events, prompts, result } = await runTurn(
+      withHistory(() => {
+        throw new Error("summary service at 10.0.0.7 is down");
+      }),
+      ["Two court cases back it."],
+      { history: older },
+    );
+
+    expect(prompts).toEqual([]);
+    expect(result.settledTurn).toMatchObject({ isError: true });
     expect(JSON.stringify(events)).not.toContain("10.0.0.7");
+  });
+
+  it("is asked again, once, when the provider rejects the prompt for its size", async () => {
+    const seen: unknown[] = [];
+    const { events, fullPrompts, result } = await runTurn(
+      withHistory((ctx) => {
+        const { tokens, window } = ctx.size!;
+        seen.push({ fits: window === undefined || tokens < window });
+        return window !== undefined && tokens >= window ? ctx.history.slice(-1) : ctx.history;
+      }),
+      [tooLong(), "Two court cases back it."],
+      { history: older },
+    );
+
+    // Before the call; after the rejection; and eve's check of what it returned.
+    expect(seen).toEqual([{ fits: true }, { fits: false }, { fits: true }]);
+    expect(fullPrompts).toHaveLength(2);
+    expect(JSON.stringify(fullPrompts[1])).not.toContain("Earlier question");
+    expect(events.filter((event) => event.type === "context.settled")).toMatchObject([
+      { data: { kind: "compaction", outcome: "completed" } },
+    ]);
+    expect(result.settledTurn).toEqual({ output: "Two court cases back it." });
+  });
+
+  it("fails the turn when the history stays after the provider rejects the prompt", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { fullPrompts, result } = await runTurn(
+      withHistory((ctx) => ctx.history),
+      [tooLong()],
+      { history: older },
+    );
+
+    expect(fullPrompts).toHaveLength(1);
+    expect(result.settledTurn).toMatchObject({
+      isError: true,
+      output: expect.stringContaining("prompt is too long"),
+    });
   });
 });
 
@@ -569,11 +648,16 @@ describe("a harness's history", () => {
   // The kernel decides the same way for a harness; only its context differs.
   const frame = () => ({ session: { id: "program-session" } }) as SessionFrame;
 
-  it("replaces eve's compaction with what its history returns", async () => {
+  it("becomes the session's history", async () => {
     const { events, fullPrompts, result } = await runTurn(
-      harnessProgram((ctx) => ({ history: () => ctx.compaction && ctx.history.slice(-1) }), frame),
+      harnessProgram(
+        (ctx) => ({
+          history: () => (ctx.size!.tokens > 600 ? ctx.history.slice(-1) : ctx.history),
+        }),
+        frame,
+      ),
       ["Two court cases back it."],
-      { history: older, threshold: 600 },
+      { history: older },
     );
 
     expect(JSON.stringify(fullPrompts[0])).not.toContain("Earlier question");
@@ -583,7 +667,7 @@ describe("a harness's history", () => {
     expect(result.settledTurn).toEqual({ output: "Two court cases back it." });
   });
 
-  it("leaves eve's compaction where its history returns undefined", async () => {
+  it("leaves the history to eve when it returns undefined", async () => {
     const { events } = await runTurn(
       harnessProgram(() => ({ history: () => undefined }), frame),
       ["A summary of the earlier exchanges.", "Two court cases back it."],
@@ -594,6 +678,25 @@ describe("a harness's history", () => {
     expect(
       events.filter((event) => event.type === "model.requested" && "changeId" in event.data.owner),
     ).toHaveLength(1);
+  });
+
+  it("summarizes with eve's summarizer, and keeps what it adds", async () => {
+    const { events, result } = await runTurn(
+      harnessProgram(
+        (ctx) => ({
+          history: async () =>
+            ctx.size!.tokens > 600 ? await ctx.summarize(ctx.history) : ctx.history,
+        }),
+        frame,
+      ),
+      ["A summary of the earlier exchanges.", "Two court cases back it."],
+      { history: older, threshold: 600 },
+    );
+
+    expect(
+      events.filter((event) => event.type === "model.requested" && "changeId" in event.data.owner),
+    ).toHaveLength(1);
+    expect(result.settledTurn).toEqual({ output: "Two court cases back it." });
   });
 });
 

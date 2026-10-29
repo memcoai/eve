@@ -27,6 +27,7 @@ import type { HarnessModelMessage } from "#harness/messages.js";
 import {
   ContentFilteredModelResponseError,
   EmptyModelResponseError,
+  isContextOverflow,
   ModelStreamStalledError,
 } from "#harness/model-call/errors.js";
 import { type ModelProfile, resolveModelProfile } from "#harness/model-profile.js";
@@ -53,7 +54,7 @@ import { throwIfTurnAborted } from "#harness/turn-cancellation.js";
 import { requireSessionModelReference, type StepResult } from "#harness/types.js";
 import { createLogger, logError } from "#internal/logging.js";
 import { CompactionOverLimitError } from "#harness/compaction/over-limit-error.js";
-import { compactedTurnInput, compactIfDue } from "#harness/compaction/step.js";
+import { compactedTurnInput, historyBeforeCall } from "#harness/compaction/step.js";
 import { reportCompactionFailure, reportModelCallFailure } from "./failure.js";
 import { buildGatewayAttributionHeaders, withGatewayTraceContext } from "./model.js";
 import {
@@ -137,6 +138,9 @@ export class ModelCaller {
   /** Usage of a call steering interrupted, which the steered step still counts. */
   private interruptedUsage: TokenUsageDelta | undefined;
   private compactionFailure: { readonly error: unknown } | undefined;
+  /** The provider rejected a prompt for its size; the next attempt's history knows it. */
+  private overflow: "retrying" | "retried" | undefined;
+  private overflowError: unknown;
   /** Tries at this model step, across the runs a retry after output replaced. */
   private attemptIndex = 0;
   /** The attempt the stream last heard start, until it hears how it ended. */
@@ -187,6 +191,13 @@ export class ModelCaller {
         if (this.compactionFailure !== undefined) throw this.compactionFailure.error;
         throwIfTurnAborted(this.step.config.abortSignal);
         this.input.generation.check();
+        // Once per step: the history learns the prompt didn't fit, then the call runs again.
+        if (this.overflow === undefined && isContextOverflow(error)) {
+          this.overflow = "retrying";
+          this.overflowError = error;
+          await this.prepareRetry(error);
+          continue;
+        }
         const recovery = recoverModelCall(error, options, diagnostics);
         if (recovery === undefined) throw error;
         await this.prepareRetry(error);
@@ -298,20 +309,30 @@ export class ModelCaller {
     return tools;
   }
 
-  /** Compacts the prompt when it's over the threshold, then rebuilds what depends on it. */
+  /**
+   * Asks for the history this call reads, then rebuilds what depends on it. After the provider
+   * rejected the prompt for its size, a history that stays fails the call with that rejection.
+   */
   private async compact(options: ModelCallOptions, tools: ToolSet): Promise<ToolSet> {
     const { step, prompt } = this;
+    const overflow = this.overflow === "retrying";
+    if (overflow) this.overflow = "retried";
     let compacted: HarnessModelMessage[] | undefined;
     try {
-      compacted = await compactIfDue(step, {
+      compacted = await historyBeforeCall(step, {
         messages: prompt.messages,
         model: this.input.model,
+        ...(overflow && { overflow: true }),
         promptMessages: withClientContext(prompt),
         requestEnvelopeTokens: this.requestEnvelopeTokens,
       });
     } catch (error) {
       this.compactionFailure = { error };
       throw error;
+    }
+    if (compacted === undefined && overflow) {
+      this.compactionFailure = { error: this.overflowError };
+      throw this.overflowError;
     }
     if (compacted === undefined) return tools;
     compactPrompt(step, prompt, compacted);

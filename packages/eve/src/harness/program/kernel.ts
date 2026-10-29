@@ -11,7 +11,6 @@ import type { JsonObject, JsonValue } from "#shared/json.js";
 import type { ContextContainer } from "#context/container.js";
 import { activeTurnIdOf } from "#protocol/session-projection.js";
 import { authoredProgram } from "./authored.js";
-import { checkHistory } from "./check.js";
 import { runProgramCalls } from "./calls.js";
 import { failProgram, invalid, PROGRAM_FAILED } from "./failure.js";
 import { fact, turnSettled } from "#harness/facts.js";
@@ -19,12 +18,11 @@ import { failTurnForReaction, prepareModelCall } from "#harness/step/context.js"
 import type { TurnInput } from "#harness/step/intake.js";
 import { buildPrompt, previewPrompt } from "#harness/step/prompt.js";
 import { defineJsonSchema } from "#tools/schema.js";
-import { nativeNext, nativeProgram } from "./native.js";
+import { nativeHistory, nativeNext, nativeProgram } from "./native.js";
 import { SessionIdKey } from "#context/keys.js";
 import type { Memo } from "#dynamic/definition.js";
 import { programScope, withMemos } from "#reactions/runner.js";
 import {
-  type Compaction,
   continuationsOf,
   force,
   NOTE_KEY,
@@ -32,8 +30,10 @@ import {
   type Plan,
   type ModelStep,
   type Next,
+  type HistorySize,
   type Program,
   type ProgramContext,
+  type Summarize,
 } from "./program.js";
 
 // The kernel side of a program: eve asks it where it decides, then applies the answer through
@@ -51,15 +51,23 @@ interface Decision {
   readonly lastStep?: ModelStep;
   /** The history the decision is about, where it isn't the session's: a request's. */
   readonly history?: readonly HarnessModelMessage[];
-  readonly compaction?: Compaction;
+  readonly size?: HistorySize;
+  readonly compact?: true;
+  readonly summarize?: Summarize;
 }
+
+const NO_SUMMARIZER: Summarize = () => {
+  throw new Error("eve summarizes the history only where it asks for the history.");
+};
 
 function programContext(step: Step, decision: Decision, memo: Memo): ProgramContext {
   const turnId = activeTurnIdOf(step.view().projection);
   const history = decision.history ?? step.session.history;
   return {
-    ...(decision.compaction !== undefined && { compaction: decision.compaction }),
+    ...(decision.compact !== undefined && { compact: decision.compact }),
     history,
+    ...(decision.size !== undefined && { size: decision.size }),
+    summarize: decision.summarize ?? NO_SUMMARIZER,
     memo,
     signal: step.config.abortSignal,
     tasks: { working: workingTaskIds(step.session) },
@@ -372,52 +380,52 @@ export class ProgramFailedError extends Error {
 }
 
 /**
- * The history the session's program keeps where eve has to shrink it, inside the change eve
- * opened. eve's own compaction's result applies as it is, and its failures are its own; anything
- * else the program returns is checked first, and a program that throws fails the change with a
- * message that doesn't reveal why.
+ * The history the session's program says the model reads about the past, or eve's own when it
+ * leaves that out. A program that throws fails with a message that doesn't reveal why; a failure of
+ * eve's summarizer is its own.
  */
 export async function programHistory(
   step: Step,
   input: {
     readonly messages: readonly HarnessModelMessage[];
-    readonly reason: Compaction["reason"];
-    readonly limit: number;
-    readonly native: (history: HarnessModelMessage[]) => Promise<HarnessModelMessage[]>;
+    readonly size: HistorySize;
+    readonly compact?: true;
+    readonly summarize: Summarize;
   },
-): Promise<HarnessModelMessage[]> {
-  const natives = new WeakSet<object>();
+): Promise<readonly HarnessModelMessage[]> {
   const failures = new WeakSet<object>();
-  const compaction: Compaction = {
-    native: async (history) => {
-      try {
-        const compacted = await input.native([...history]);
-        natives.add(compacted);
-        return compacted;
-      } catch (error) {
-        if (typeof error === "object" && error !== null) failures.add(error);
-        throw error;
-      }
-    },
-    reason: input.reason,
+  const summarize: Summarize = async (history, options) => {
+    try {
+      return await input.summarize(history, options);
+    } catch (error) {
+      if (typeof error === "object" && error !== null) failures.add(error);
+      throw error;
+    }
   };
-  let history: readonly HarnessModelMessage[] | undefined;
+  const { compaction } = step.session;
+  const options = {
+    threshold: compaction.threshold,
+    ...(compaction.thresholdPercent !== undefined && {
+      thresholdPercent: compaction.thresholdPercent,
+    }),
+  };
   try {
-    ({ value: history } = await evaluate(step, {
-      context: { compaction, history: input.messages },
+    const { value } = await evaluate(step, {
+      context: {
+        ...(input.compact !== undefined && { compact: input.compact }),
+        history: input.messages,
+        size: input.size,
+        summarize,
+      },
       decision: "history",
-      field: (plan, ctx) => plan.history ?? (() => compaction.native(ctx.history)),
-    }));
+      field: (plan, ctx) => async () =>
+        (await force(plan.history)) ?? (await nativeHistory(ctx, options)),
+    });
+    return value!;
   } catch (error) {
     throwIfTurnAborted(step.config.abortSignal);
     if (typeof error === "object" && error !== null && failures.has(error)) throw error;
     log.error("the session program's history threw", { error, turnId: step.position().turnId });
     throw new ProgramFailedError(error);
   }
-  if (history === undefined) return [...input.messages];
-  if (natives.has(history)) return history as HarnessModelMessage[];
-  return checkHistory(input.messages, history, {
-    automatic: input.reason === "automatic",
-    limit: input.limit,
-  });
 }

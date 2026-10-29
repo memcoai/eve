@@ -364,6 +364,34 @@ export function classifyModelCallError(error: unknown): "retry" | "recoverable" 
   return "recoverable";
 }
 
+/**
+ * Whether the provider rejected the call because its prompt doesn't fit the model's context
+ * window. Matched on the wording providers use, anywhere on the cause chain; "too many tokens"
+ * alone is left out, since rate limits say it too.
+ */
+export function isContextOverflow(error: unknown): boolean {
+  for (const candidate of walkCauseChain(error)) {
+    const texts = [
+      readErrorMessage(candidate),
+      readStringField(candidate, "responseBody"),
+      readStringField(readObjectField(candidate, "data"), "message"),
+    ];
+    if (texts.some((text) => text !== undefined && CONTEXT_OVERFLOW.some((re) => re.test(text)))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const CONTEXT_OVERFLOW: readonly RegExp[] = [
+  /context[_ ]length[_ ]exceeded/i,
+  /maximum context length/i,
+  /prompt is too long/i,
+  /input is too long/i,
+  /exceeds? (?:the |this )?(?:model's )?(?:maximum )?context (?:window|length)/i,
+  /input token count .* exceeds the maximum/i,
+];
+
 function hasRetryableFlag(error: unknown): boolean {
   for (const candidate of walkCauseChain(error)) {
     if (isObject(candidate) && candidate.isRetryable === true) {

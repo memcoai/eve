@@ -36,23 +36,36 @@ export interface ProgramTurn {
   readonly lastStep?: ModelStep;
 }
 
-/** Where eve has to shrink the history: what asked, and eve's own way of doing it. */
-export interface Compaction {
-  /** `automatic`: the prompt eve measured is over the threshold. `manual`: `session.compact()`. */
-  readonly reason: "automatic" | "manual";
-  /** eve's compaction: older turns become a summary checkpoint, and recent ones stay whole. */
-  native(history: readonly HarnessModelMessage[]): Promise<HarnessModelMessage[]>;
+/** How big the next model call is, as eve estimates it before sending it. */
+export interface HistorySize {
+  /** The call's estimated input tokens: instructions, tools, and the history. */
+  readonly tokens: number;
+  /** The model's context window, when eve knows it. */
+  readonly window?: number;
 }
+
+/** eve's summary of older turns: a checkpoint, and the recent turns whole. */
+export type Summarize = (
+  history: readonly HarnessModelMessage[],
+  options?: {
+    /** The call's input tokens to aim under. eve's own threshold when absent. */
+    readonly tokens?: number;
+  },
+) => Promise<HarnessModelMessage[]>;
 
 export interface ProgramContext {
   /** The running turn, or `null` between turns. */
   readonly turn: ProgramTurn | null;
   readonly history: readonly HarnessModelMessage[];
-  /** Present where eve has to shrink the history. */
-  readonly compaction?: Compaction;
+  /** The next model call's size, where eve asks for the history. */
+  readonly size?: HistorySize;
+  /** `session.compact()` asked for a compaction, where eve asks for the history. */
+  readonly compact?: true;
+  /** eve's summarizer. Only where eve asks for the history; elsewhere it throws. */
+  readonly summarize: Summarize;
   /**
    * Keeps what the program learns from outside, as a dynamic value's `ctx.memo` does. Each
-   * decision (`history`, `next`, `prompt`) keeps what its latest evaluation used. A cache, not a
+   * decision (`history`, `next`) keeps what its latest evaluation used. A cache, not a
    * record of effects: a deployment change or a crash can run it again.
    */
   readonly memo: Memo;
@@ -82,11 +95,11 @@ export type Next =
 /** What a program says should be true. A field it leaves out is eve's own. */
 export interface Plan {
   /**
-   * The history the session keeps. eve reads it only where it has to shrink the history, inside
-   * the context change it opens there, and checks it unless it's what `compaction.native`
-   * returned.
+   * What the model reads about the past, which becomes the session's history. eve asks before
+   * each model call and for `session.compact()`. `undefined` is eve's own: summarize past the
+   * threshold, or the history as it is.
    */
-  readonly history?: Lazy<readonly HarnessModelMessage[]>;
+  readonly history?: Lazy<readonly HarnessModelMessage[] | undefined>;
   readonly next?: Lazy<Next>;
 }
 

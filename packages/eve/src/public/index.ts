@@ -39,11 +39,11 @@ export {
   type HarnessDeclared,
   type HarnessDeclaredInstructions,
   type HarnessDeclaredTools,
-  type HarnessCompaction,
   type HarnessContext,
   type HarnessDefinition,
   type HarnessModelStep,
   type HarnessNext,
+  type HarnessSize,
   type HarnessPlan,
   defineHarness,
 } from "#public/definitions/harness.js";

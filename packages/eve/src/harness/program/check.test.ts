@@ -15,8 +15,8 @@ const history: HarnessModelMessage[] = [
   { content: "Here is the report.", role: "assistant" },
   latest,
 ];
-const automatic = { automatic: true, limit: 10_000 };
-const manual = { automatic: false, limit: 10_000 };
+const automatic = { keepInput: true, limit: 10_000 };
+const manual = { keepInput: false, limit: Number.POSITIVE_INFINITY };
 
 function checkpoint(summary: string): HarnessModelMessage[] {
   return [
@@ -69,7 +69,7 @@ describe("checkHistory", () => {
   });
 
   it("rejects an automatic result over the limit", () => {
-    expect(() => checkHistory(history, [latest], { automatic: true, limit: 1 })).toThrow(
+    expect(() => checkHistory(history, [latest], { keepInput: true, limit: 1 })).toThrow(
       "the limit is ~1",
     );
   });

@@ -21,7 +21,7 @@ import type { InternalContext, ValueReaction } from "#reactions/reaction.js";
 import { BundleKey, type CompiledBundle } from "#runtime/sessions/runtime-context-keys.js";
 import type { HistoryMessage } from "#shared/history-message.js";
 import { nativeNext } from "./native.js";
-import { type Compaction, continuationsOf, force, type Program } from "./program.js";
+import { continuationsOf, force, type Program, type ProgramContext } from "./program.js";
 
 // `agent/harness.ts` is a program authors write. Its `next` and `history` fields are decisions
 // the kernel asks for; its `agent` fields are dynamic values, which the bundle evaluates before
@@ -42,21 +42,20 @@ export function harnessProgram(harness: Harness, frame: () => SessionFrame): Pro
   return (program) => {
     const plan = harness(
       harnessContext({
-        compaction: program.compaction,
+        ...(program.compact !== undefined && { compact: program.compact }),
         frame,
         history: program.history,
         lastStep: program.turn?.lastStep,
         memo: program.memo,
+        ...(program.size !== undefined && { size: program.size }),
+        summarize: program.summarize,
         turnId: program.turn?.id,
       }),
     );
     return {
       ...(plan.history !== undefined && {
         history: async () =>
-          ((await force(plan.history)) as readonly HarnessModelMessage[] | undefined) ??
-          (program.compaction === undefined
-            ? program.history
-            : await program.compaction.native(program.history)),
+          (await force(plan.history)) as readonly HarnessModelMessage[] | undefined,
       }),
       next: async () => (await force(plan.next)) ?? nativeNext(program),
     };
@@ -155,6 +154,9 @@ function fromValue(ctx: InternalContext): HarnessContext {
     frame: () => ctx,
     history: (ctx.history ?? []) as readonly HarnessModelMessage[],
     memo: ctx.memo,
+    summarize: () => {
+      throw new Error("eve summarizes the history only where it asks for the history.");
+    },
     turnId: ctx.turn?.status === "settled" ? undefined : ctx.turn?.id,
   });
 }
@@ -165,7 +167,9 @@ function harnessContext(input: {
   readonly memo: Memo;
   readonly turnId: string | undefined;
   readonly lastStep?: HarnessModelStep;
-  readonly compaction?: Compaction;
+  readonly compact?: true;
+  readonly size?: ProgramContext["size"];
+  readonly summarize: ProgramContext["summarize"];
 }): HarnessContext {
   const frame = input.frame();
   const turn = turnFacts(
@@ -180,15 +184,13 @@ function harnessContext(input: {
     session: frame.session,
     turn: frame.turn,
     view: frame.view,
-    ...(input.compaction !== undefined && {
-      compaction: {
-        native: async (history: readonly HistoryMessage[]) =>
-          (await input.compaction!.native(
-            history as readonly HarnessModelMessage[],
-          )) as HistoryMessage[],
-        reason: input.compaction.reason,
-      },
-    }),
+    ...(input.compact !== undefined && { compact: input.compact }),
+    ...(input.size !== undefined && { size: input.size }),
+    summarize: async (history, options) =>
+      (await input.summarize(
+        history as readonly HarnessModelMessage[],
+        options,
+      )) as HistoryMessage[],
     continuations: input.turnId === undefined ? 0 : continuationsOf(input.history, input.turnId),
     history: input.history as readonly HistoryMessage[],
     ...(input.lastStep !== undefined && { lastStep: input.lastStep }),

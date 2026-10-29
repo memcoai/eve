@@ -12,6 +12,7 @@ import type { ContextContainer } from "#context/container.js";
 import { activeTurnIdOf } from "#protocol/session-projection.js";
 import { authoredProgram } from "./authored.js";
 import { checkHistory } from "./check.js";
+import { runProgramCalls } from "./calls.js";
 import { failProgram, invalid, PROGRAM_FAILED } from "./failure.js";
 import { fact, turnSettled } from "#harness/facts.js";
 import { failTurnForReaction, prepareModelCall } from "#harness/step/context.js";
@@ -141,8 +142,8 @@ export type BeforeModel =
 const MODEL = Symbol("model");
 
 /**
- * Asks the session's program what the turn does before a model call: at the turn's start and
- * input joined. Right after it continued with a note, it has decided already.
+ * Asks the session's program what the turn does before a model call: at the turn's start, after
+ * calls settle, after input joined. Right after it continued with a note, it has decided already.
  * The step's dynamic values are evaluated first, then the turn's input joins history, so what the
  * program reads, and what it does, is the same here as after a model step.
  */
@@ -220,6 +221,7 @@ async function apply(
     }
     return await settleTurn(step, next.settle, { lastStep });
   }
+  if ("calls" in next) return await runProgramCalls(step, next.calls);
   if ("fail" in next) return await failWith(step, next.fail.message);
   return await invalid(step, "returned a next step eve doesn't know");
 }

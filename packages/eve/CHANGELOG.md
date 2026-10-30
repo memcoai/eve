@@ -1,5 +1,27 @@
 # eve
 
+## 0.91.0
+
+Released 2026-10-30 · [Compare with 0.90.0](https://github.com/vercel/eve/compare/eve%400.90.0...eve%400.91.0)
+
+### Breaking Changes
+
+- `session.clear()` now cancels a running turn and every working task before it clears history, instead of waiting for the turn to finish.
+  Previously a clear sent while a turn waited on tasks didn't run until the tasks finished, and never ran if one hung. Tasks a clear stops end with `task.ended` `outcome: "cancelled"`, and no task result the cleared conversation hadn't read reaches the next turn. ([#5619](https://github.com/vercel/eve/pull/5619))
+
+### Features
+
+- Hooks can start a session's next turn with `ctx.continue()` from `turn.settled` and `*` handlers.
+  Other handlers don't receive it. It continues a completed turn, or a turn the same hook cancelled, and hooks that continue one turn share its next turn. It takes `MessageContent` with `session.send()`'s `context` and an optional `auth`, returns `{ queued }` synchronously, and yields to any other turn, cancel, clear, or reset that comes first. `delivery.admitted` records `source: { channel, hook }`. ([#5555](https://github.com/vercel/eve/pull/5555))
+
+### Bug Fixes
+
+- Sessions now fail controls their eve version does not support, so the control's delivery settles `failed` instead of never settling. ([#5622](https://github.com/vercel/eve/pull/5622))
+- A connection in `agent/connections/*.ts` now keeps an `approval` written as `{ request, response, prompt }`, so its tools ask for approval and run its `response` policy.
+  Previously only the function form was kept and the object form was dropped, so the connection's tools ran without asking anyone. A malformed `approval` now fails resolution instead of being ignored. ([#5632](https://github.com/vercel/eve/pull/5632))
+- `ctx.turn.input` keeps the turn's input after the turn pauses for an approval, a question, a sign-in, or a budget answer.
+  Dynamic values no longer see empty input after the pause, including `auto()` if its per-turn memo was invalidated. ([#5628](https://github.com/vercel/eve/pull/5628))
+
 ## 0.90.0
 
 Released 2026-10-29 · [Compare with 0.89.0](https://github.com/vercel/eve/compare/eve%400.89.0...eve%400.90.0)

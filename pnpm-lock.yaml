@@ -458,6 +458,9 @@ importers:
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
+      '@memco/eve':
+        specifier: 0.1.1
+        version: 0.1.1(eve@packages+eve)
       '@moorcheh-ai/memanto':
         specifier: 0.2.29
         version: 0.2.29(ai@7.0.137(zod@4.5.4))(eve@packages+eve)(openai@6.49.0(@smithy/signature-v4@5.7.3)(ws@8.21.3(bufferutil@4.1.0))(zod@4.5.4))(zod@4.5.4)
@@ -3414,8 +3417,8 @@ packages:
   '@graphile/logger@0.2.0':
     resolution: {integrity: sha512-jjcWBokl9eb1gVJ85QmoaQ73CQ52xAaOCF29ukRbYNl6lY+ts0ErTaDYOBlejcbUs2OpaiqYLO5uDhyLFzWw4w==}
 
-  '@grpc/grpc-js@1.14.4':
-    resolution: {integrity: sha512-k9Dj3DV/itK9D06Y8f190Qgop7/Ui+D0njFV3LHMPwPT75DpXLQohE9Wmz0QElrJnzsjB7KPWiKJbOl7IPDArQ==}
+  '@grpc/grpc-js@1.14.6':
+    resolution: {integrity: sha512-SgC/B3/VZ8lTyOZ4Cwk6f1skWhmkNAaVfiX90qd5u1rRXGKk1//8FTUEN9GvOUq7rfWIqAYkA3CoyumYVpOS6g==}
     engines: {node: '>=12.10.0'}
 
   '@grpc/proto-loader@0.7.15':
@@ -3808,6 +3811,16 @@ packages:
 
   '@mdx-js/mdx@3.1.1':
     resolution: {integrity: sha512-f6ZO2ifpwAQIpzGWaBQT2TXxPv6z3RBzQKpVftEWN78Vl/YweF1uwussDx8ECAXVtr3Rs89fKyG9YlzUs9DyGQ==}
+
+  '@memco/eve@0.1.1':
+    resolution: {integrity: sha512-e2XhrIN6TTnpiCA9HMwvRmQtF2fO6aLl2JO5qlajV8LvQdzf0l3Kq8qe86GQKU8Cj4FD7CE1j+NM+tsRdooJjw==}
+    engines: {node: '>=24'}
+    peerDependencies:
+      eve: '>=0.84.1 <1'
+
+  '@memco/memcoai@0.3.1':
+    resolution: {integrity: sha512-fOvFUfVj1CnvBD/chMK9esFcXM5EuvmjRheyBZEg/85eNNUuBkxJFQe9efTtyEpNHJi7FkMzG2qHx6VYI/gcyQ==}
+    engines: {node: '>=22'}
 
   '@mermaid-js/parser@1.2.1':
     resolution: {integrity: sha512-n12NohV3mrUyUL2o93IgG/ifeW9FTyeJn3zDxkhwa8MJ9Fxg3HQMlA3RiGmD/3UnJvheztkjjQAjA2T4LmUcpw==}
@@ -16837,7 +16850,7 @@ snapshots:
 
   '@graphile/logger@0.2.0': {}
 
-  '@grpc/grpc-js@1.14.4':
+  '@grpc/grpc-js@1.14.6':
     dependencies:
       '@grpc/proto-loader': 0.8.1
       '@js-sdsl/ordered-map': 4.4.2
@@ -17273,6 +17286,16 @@ snapshots:
       vfile: 6.0.3
     transitivePeerDependencies:
       - supports-color
+
+  '@memco/eve@0.1.1(eve@packages+eve)':
+    dependencies:
+      '@memco/memcoai': 0.3.1
+      eve: link:packages/eve
+
+  '@memco/memcoai@0.3.1':
+    dependencies:
+      '@bufbuild/protobuf': 2.15.0
+      '@grpc/grpc-js': 1.14.6
 
   '@mermaid-js/parser@1.2.1':
     dependencies:
@@ -18663,7 +18686,7 @@ snapshots:
   '@photon-ai/advanced-imessage@1.0.0':
     dependencies:
       '@bufbuild/protobuf': 2.15.0
-      '@grpc/grpc-js': 1.14.4
+      '@grpc/grpc-js': 1.14.6
       nice-grpc: 2.1.17
       nice-grpc-common: 2.0.4
 
@@ -23702,7 +23725,7 @@ snapshots:
   dockerode@4.0.12(supports-color@10.2.2):
     dependencies:
       '@balena/dockerignore': 1.0.2
-      '@grpc/grpc-js': 1.14.4
+      '@grpc/grpc-js': 1.14.6
       '@grpc/proto-loader': 0.7.15
       docker-modem: 5.0.7(supports-color@10.2.2)
       protobufjs: 7.6.6
@@ -27207,7 +27230,7 @@ snapshots:
 
   nice-grpc@2.1.17:
     dependencies:
-      '@grpc/grpc-js': 1.14.4
+      '@grpc/grpc-js': 1.14.6
       abort-controller-x: 0.5.0
       nice-grpc-common: 2.0.4
 

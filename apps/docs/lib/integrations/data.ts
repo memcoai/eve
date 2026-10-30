@@ -1959,6 +1959,118 @@ Automatic capture is unsupported in this reviewed configuration. The published a
 
 The reviewed configuration expects a running Memanto server at \`MEMANTO_BASE_URL\`. If you omit it during \`eve dev\`, the adapter starts a local server with the unpinned default \`memanto\` package through \`uvx\`. That local-server path is outside the reviewed compatibility boundary. Keep \`MOORCHEH_API_KEY\` in the environment rather than prompts or source control. See the [Memanto eve guide](https://docs.memanto.ai/integrations/eve) for server setup and all provider options.`,
   },
+  memco: {
+    logo: "memco",
+    docsHref: "https://docs.memco.ai/integrations/eve/",
+    keywords: [
+      "memory",
+      "shared memory",
+      "team memory",
+      "multi-tenant",
+      "semantic search",
+      "continual learning",
+      "feedback",
+      "memco",
+    ],
+    install: `Give your eve agent shared memory it can build on across conversations. Findings from one task can help other people and agents in the same network; agents can add new evidence and report what worked.
+
+Install the memco provider:
+
+\`\`\`bash
+eve add memory/memco
+\`\`\`
+
+This installs \`@memco/eve\` and writes a memory slot. You need Node.js 24 or later, \`eve >=0.84.1 <1\`, and a [memco](https://memco.ai) account. memco hosts the memory service; you do not need to run a separate server.`,
+    quickStart: `### Shared identity
+
+Use one API token for a personal agent or one trusted team. For separate customers, use the multi-tenant setup below.
+
+Create a token in the [memco dashboard](https://spark.memco.ai/) and set it in the server environment, or in an uncommitted \`.env.local\` for local development:
+
+\`\`\`bash title=".env.local"
+MEMCO_API_TOKEN=...
+\`\`\`
+
+The memory slot uses a shared identity:
+
+\`\`\`ts title="agent/memory/memco.ts"
+import { memco } from "@memco/eve";
+import { defineMemory } from "eve/memory";
+import { byPrincipal } from "eve/memory/scope";
+
+export default defineMemory({
+  description: "The team's shared memory: search it before working something out.",
+  provider: memco({ domain: "knowledge" }),
+  scope: byPrincipal,
+});
+\`\`\`
+
+Every caller using this slot shares the token's memco identity and the memory it can access. \`byPrincipal\` disables memory for anonymous and runtime callers and enables it in \`eve dev\`; it does not create private memco memory for each caller.
+
+### Multi-tenant
+
+Use an API client to share knowledge within each customer organisation while keeping different customers' networks separate. The client needs the \`network-management\` and \`user-management\` scopes and the admin grant to act for your users; see the [credential guide](https://docs.memco.ai/sdk/embedding-memory/#managing-networks-and-users).
+
+\`\`\`bash title=".env.local"
+MEMCO_CLIENT_ID=...
+MEMCO_CLIENT_SECRET=...
+\`\`\`
+
+Replace the slot with one scoped by \`byTenant\`:
+
+\`\`\`ts title="agent/memory/memco.ts"
+import { byTenant, memco } from "@memco/eve";
+import { defineMemory } from "eve/memory";
+
+export default defineMemory({
+  description: "Your organization's shared memory: search it before working something out.",
+  provider: memco({ domain: "knowledge" }),
+  namespace: "my-agent",
+  scope: byTenant((principal) => {
+    const tenant = principal.attributes.tenantId;
+    return typeof tenant === "string" ? tenant : null;
+  }),
+});
+\`\`\`
+
+The provider maintains a network for each tenant and a separate identity for each user in that tenant. Each turn uses a short-lived user key. Users share their tenant's knowledge, so one agent's findings can help another agent working for the same customer.
+
+Derive \`tenantId\` from verified sign-in, never from a prompt or model input. \`byTenant\` disables memory for non-user principals or an unresolved tenant, including eve's local development principal. Test this mode through a channel with authenticated users. Pairing \`byTenant\` with a single API token fails the turn rather than sharing one identity across tenants.
+
+To show readable names in memco, pass \`userName\` to \`memco()\`. Derive it from verified sign-in and consider what personal information the name sends to memco.`,
+    configure: `### How the agent uses memory
+
+\`agent/memory/memco.ts\` creates the \`memco\` slot. The provider supplies a domain briefing and reminders to search before working and save reusable findings. Retrieval happens when the agent calls a memory tool; the provider does not automatically search with each incoming message.
+
+The agent gets these tools:
+
+| Tool | What it does |
+| --- | --- |
+| \`memco__search\` | Finds existing knowledge |
+| \`memco__get_memory\` | Reads a memory |
+| \`memco__create_memory\` | Saves a finding |
+| \`memco__enrich_memory\` | Adds evidence or missing detail to an existing memory |
+| \`memco__share_feedback\` | Reports relevance and correctness feedback on retrieved knowledge |
+| \`memco__revert_memory\` | Undoes one of the user's own recent writes within the service's revert window |
+
+For example, a support agent might record a workaround. Another agent serving the same customer can add a missing condition and report whether it worked.
+
+The briefing and reminders work without any further setup. To guide the agent further, such as what it should not save, add that to \`agent/instructions.md\`.
+
+### Namespaces and deployment
+
+Set a stable, explicit \`namespace\` before launch, unique per app within your memco organisation. In multi-tenant mode, the namespace, tenant ID and domain identify the tenant network. Changing the namespace points tenants at new networks without deleting their old ones.
+
+eve adds no environment suffix to an explicit namespace. For multi-tenant Preview deployments, use a separate memco organisation or a distinct preview namespace. A namespace does not partition stored memory when callers share one API token; use separate identities when previews must not access that token's production memory.
+
+### Data and permissions
+
+The provider does not capture conversation transcripts. The agent writes findings through memory tools, and their inputs, including search queries, are sent to memco. In the default configuration, the model can call these tools without a separate user approval. Saved knowledge can be retrieved by other people and agents with access to the same network; it is not private to the conversation that created it.
+
+Keep credentials server-side and use one credential set: API client credentials take precedence when both they and a token are set. Treat retrieved content as untrusted data, not instructions, and never save secrets. See [Tell the model how to use memory](/docs/memory#tell-the-model-how-to-use-memory).
+
+See the [provider README](https://github.com/memcoai/eve-memco#readme) for a save-and-search verification, options, failure behaviour and the calls each turn makes.`,
+  },
 };
 
 const extensionPresentations: Record<string, ExtensionPresentation> = {

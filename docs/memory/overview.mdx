@@ -139,6 +139,7 @@ how they capture it.
 | [Supermemory](#supermemory)             | `@supermemory/eve`      | Semantic search over stored memories                   | Automatic after each turn, plus tools                |
 | [Upstash AgentKit](#upstash-agentkit)   | `@upstash/agentkit-eve` | Ranked Redis Search recall or a Redis document backend | Automatic user-message capture or model-driven tools |
 | [Kybernesis Arcana](#kybernesis-arcana) | `@kybernesis/arcana`    | Semantic search and brain notes                        | Model-driven tools or optional automatic capture     |
+| [memco](#memco)                         | `@memco/eve`            | Briefing and nudge; memory search through tools        | Model-driven tools only                              |
 | [Your own provider](#build-your-own)    | Your code               | Whatever your store returns                            | Whatever rules you implement                         |
 
 ### File memory
@@ -240,6 +241,36 @@ export default defineMemory({
 Set `capture: { enabled: true }` when you want Arcana to capture completed
 turns automatically. See the [Arcana package documentation](https://github.com/KybernesisAI/platform/tree/master/packages/arcana#readme)
 for provider options.
+
+### memco
+
+[memco](https://docs.memco.ai/integrations/eve/) is hosted shared memory:
+agents learn from their work and from each other, and findings from one task can
+help other people and agents in the same network. It recalls guidance rather than
+transcripts, and the model reads and writes through tools.
+
+```bash
+eve add memory/memco
+```
+
+The command installs `@memco/eve` and writes a `memco` slot:
+
+```ts title="agent/memory/memco.ts"
+import { memco } from "@memco/eve";
+import { defineMemory } from "eve/memory";
+import { byPrincipal } from "eve/memory/scope";
+
+export default defineMemory({
+  description: "The team's shared memory: search it before working something out.",
+  provider: memco({ domain: "knowledge" }),
+  scope: byPrincipal,
+});
+```
+
+With `MEMCO_API_TOKEN`, every signed-in caller shares the token's memco identity
+and memory. For separate customers, use an API client and `byTenant` from
+`@memco/eve`, which gives each tenant its own network. See the
+[memco integration page](/integrations/memco) for both setups.
 
 ### Build your own
 

@@ -43,30 +43,44 @@ A run passes when it compacts at least once, every compaction completes (the rew
 passed `checkHistory`), and the last reply holds the code. `reads` counts `read-file` calls: more
 than six means the agent lost the code and read the file again.
 
-## Results (mock model)
+## Results
+
+The default e2e model (AI Gateway), one run per strategy:
+
+|                     | default | opencode | Codex                    |
+| ------------------- | ------- | -------- | ------------------------ |
+| Task finished       | yes     | yes      | yes                      |
+| Compactions         | 3, step | 2, step  | 20 (16 step, 4 turn-end) |
+| Model calls         | 14      | 16       | 48                       |
+| `read-file` calls   | 6       | 7        | 74                       |
+| Input tokens        | 77,830  | 132,013  | 347,433                  |
+| Cached input tokens | 75,875  | 101,232  | 75,416                   |
+| Output tokens       | 380     | 689      | 5,957                    |
+
+The mock model, for a deterministic baseline:
 
 |                   | default | opencode | Codex       |
 | ----------------- | ------- | -------- | ----------- |
-| Task finished     | yes     | yes      | yes         |
 | Compactions       | 2, step | 1, step  | 3, turn-end |
-| Model calls       | 13      | 15       | 16          |
 | `read-file` calls | 6       | 7        | 6           |
 | Input tokens      | 75,523  | 106,550  | 65,565      |
-| Output tokens     | 41      | 55       | 101         |
 
-The mock model reports no cache reads; real-model results, with cached input, are pending.
-
-- **opencode** compacts latest (near the window) and its prune-first move clears the old tool output
-  that held the code, with no summary of it. The agent has to read the file again, which is the
-  most input of the three.
-- **Codex** compacts between turns, so no turn carries a mid-turn summary call and the next request
-  starts small: the least input, at the cost of the most output (three summaries).
-- **eve's default** sits between them.
+- **eve's default** keeps a fixed tail, so the turn's latest tool result survives compaction and the
+  agent never re-reads.
+- **opencode** compacts latest and prunes first: the prune cleared the old tool output that held the
+  code, with no summary of it, so the agent read the first file again.
+- **Codex thrashed on the real model.** A compaction in the middle of a turn keeps only the summary
+  and user messages, and eve puts the summary first, so the last message the model sees is the
+  turn's own unanswered "Read X". It reads X again, the result pushes the request back over the
+  limit, and it compacts again. Codex itself puts the summary after the retained user messages,
+  so its model continues from the summary instead. With the mock model, padding the instructions by ~5k tokens so one file read crosses the limit
+  makes the Codex run stop finishing: it ran past 2 minutes, against 3 seconds unpadded.
+  Compacting between turns, Codex is the cheapest of the three on the mock run.
 
 ## What the API could not express
 
 - **Summary placement.** Codex puts the summary after the retained user messages; eve's
-  `checkpoint()` must open the history, so the port puts it first.
+  `checkpoint()` must open the history, so the port puts it first. This caused the thrash above.
 - **Message kinds.** `HistoryMessage` has no typed kind, so telling a person's message from a
   framework-injected one is done by content shape.
 - **Output reserve.** The trigger's measure has no reserved output tokens, so opencode's reserve is
